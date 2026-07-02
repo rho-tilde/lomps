@@ -1,0 +1,23 @@
+[protocol]
+name = "nonintegrable_ising_L4"
+physical_dimension = 2
+bond_dimension = 12
+block_length = 4
+delta_t = 0.001
+g = 1.05
+h = -0.5
+J = -1.0
+trotter_order = 2
+symmetric_transverse = false
+
+[optimizer]
+method = "gauge_orthogonal_levenberg_marquardt"
+gradient_tolerance = 1e-11
+cost_tolerance = 3e-16
+maximum_iterations = 40000
+
+[restart]
+fixed_target = true
+perturb_amplitudes = [0.3, 0.6, 1.0, 2.0, 4.0, 8.0]
+perturbations_per_amplitude = 2
+haar_random_restarts = 12

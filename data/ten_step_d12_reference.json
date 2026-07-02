@@ -1,0 +1,22 @@
+{
+  "initial_time": 0.001,
+  "delta_t": 0.001,
+  "optimizer": {
+    "gradient_tolerance": 1e-11,
+    "cost_tolerance": 3e-16,
+    "maximum_iterations": 40000
+  },
+  "costs": [
+    1.740864e-15,
+    2.698137e-16,
+    2.793527e-16,
+    2.512569e-16,
+    2.867062e-16,
+    7.170584e-18,
+    1.943510e-16,
+    2.181630e-16,
+    1.781727e-17,
+    2.643355e-16
+  ],
+  "note": "Regression values are platform-sensitive and intended as approximate diagnostics, not bitwise golden outputs."
+}
