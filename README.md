@@ -67,14 +67,19 @@ the TOML files in [configs](configs/) for the reference parameters.
 
 ## Reference data
 
-The repository includes only two compact tensors:
+The repository includes two compact checkpoint tensors:
 
 - `nonintegrable_d12_t0p001.npy`: the first saved tensor of the historical
   non-integrable D=12 trajectory, used for reproducible comparisons;
 - `nonintegrable_d10_t3p235.npy`: the last valid D=10 tensor immediately before
   a warm-start plateau, used to exercise fixed-target rescue.
 
-Large trajectories and generated plots are deliberately excluded from Git.
+It also includes the completed new D=12 trajectory under
+`data/nonintegrable_d12_trajectory/`.  The standalone checkpoint above is the
+tensor at `t=0.001`; `trajectory_states.npy` and `trajectory_times.npy` then
+contain the 19,999 aligned samples from `t=0.002` through `t=20`.  See the
+README in that directory for shapes, hashes, and a loading example.
+
 The adjacent `ten_step_d12_reference.json` records approximate regression
-costs for the example; floating-point details may vary across BLAS/LAPACK
-implementations.
+costs for the compact example; floating-point details may vary across
+BLAS/LAPACK implementations.
