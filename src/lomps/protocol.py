@@ -10,11 +10,12 @@ import numpy as np
 
 from .gates import (
     partial_trace_sites,
+    second_order_brickwall_density,
     second_order_brickwall_unitary,
     two_site_gate_tfim,
 )
+from .optimizer import FixedPointSolver, optimizer_right_fixed_point
 from .rdm import block_rdm
-from .transfer import right_fixed_point
 
 
 Array = np.ndarray
@@ -33,6 +34,8 @@ class LocalEvolutionProtocol:
     trotter_order: int = 2
     symmetric_transverse: bool = False
     odd_parity_warning_threshold: float = 1e-6
+    target_contraction: str = "tensor"
+    target_source_fixed_point_solver: FixedPointSolver = "dense"
 
     @property
     def lightcone_sites(self) -> int:
@@ -81,7 +84,7 @@ class LocalEvolutionProtocol:
             sites=self.lightcone_sites,
         )
 
-    def target_rdm_candidates(self, A: Array) -> tuple[Array, ...]:
+    def target_rdm_candidates(self, A: Array, r: Array | None = None) -> tuple[Array, ...]:
         """Return one or two reductions of the evolved light cone.
 
         Even block lengths use the symmetric ``2 | L | 2`` reduction. Odd block
@@ -90,9 +93,26 @@ class LocalEvolutionProtocol:
         of light-cone sites.
         """
 
-        r, _ = right_fixed_point(A)
+        if self.target_contraction not in ("tensor", "dense"):
+            raise ValueError("target_contraction must be 'tensor' or 'dense'")
+        if self.target_source_fixed_point_solver not in ("dense", "fast"):
+            raise ValueError(
+                "target_source_fixed_point_solver must be 'dense' or 'fast'"
+            )
+        if r is None:
+            r, _ = optimizer_right_fixed_point(A, self.target_source_fixed_point_solver)
+        else:
+            r = np.asarray(r, dtype=np.complex128)
         rho_large = block_rdm(A, self.lightcone_sites, r)
-        evolved = self.brickwall_unitary @ rho_large @ self.brickwall_unitary.conj().T
+        if self.target_contraction == "dense":
+            evolved = self.brickwall_unitary @ rho_large @ self.brickwall_unitary.conj().T
+        else:
+            evolved = second_order_brickwall_density(
+                rho_large,
+                self.half_gate,
+                self.full_gate,
+                sites=self.lightcone_sites,
+            )
         candidates = []
         for left_margin, right_margin in self.target_margins:
             traced = tuple(range(left_margin)) + tuple(
@@ -112,10 +132,10 @@ class LocalEvolutionProtocol:
         difference = 0.5 * ((rho_a - rho_b) + (rho_a - rho_b).conj().T)
         return 0.5 * float(np.sum(np.abs(np.linalg.eigvalsh(difference))))
 
-    def target_rdm(self, A: Array) -> Array:
+    def target_rdm(self, A: Array, r: Array | None = None) -> Array:
         """Evolve the light cone and retain the protocol's ``block_length`` sites."""
 
-        candidates = self.target_rdm_candidates(A)
+        candidates = self.target_rdm_candidates(A, r)
         if len(candidates) == 1:
             return candidates[0]
 

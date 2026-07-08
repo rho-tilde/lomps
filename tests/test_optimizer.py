@@ -132,6 +132,65 @@ class OptimizerTests(unittest.TestCase):
         current = block_rdm(A, protocol.block_length)
         np.testing.assert_allclose(target, current, atol=1e-12, rtol=0.0)
 
+    def test_cached_target_source_fixed_point_reproduces_target(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=86)
+        r, _ = optimizer_right_fixed_point(A, "dense")
+        np.testing.assert_allclose(
+            NONINTEGRABLE_ISING.target_rdm(A, r),
+            NONINTEGRABLE_ISING.target_rdm(A),
+            atol=1e-14,
+            rtol=1e-13,
+        )
+
+    def test_tensor_target_contraction_matches_dense_even_protocol(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=79)
+        tensor_protocol = replace(NONINTEGRABLE_ISING, target_contraction="tensor")
+        dense_protocol = replace(NONINTEGRABLE_ISING, target_contraction="dense")
+        np.testing.assert_allclose(
+            tensor_protocol.target_rdm(A),
+            dense_protocol.target_rdm(A),
+            atol=2e-14,
+            rtol=1e-13,
+        )
+
+    def test_tensor_target_contraction_matches_dense_odd_protocol(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=80)
+        tensor_protocol = replace(
+            NONINTEGRABLE_ISING,
+            block_length=3,
+            target_contraction="tensor",
+            odd_parity_warning_threshold=np.inf,
+        )
+        dense_protocol = replace(
+            NONINTEGRABLE_ISING,
+            block_length=3,
+            target_contraction="dense",
+            odd_parity_warning_threshold=np.inf,
+        )
+        np.testing.assert_allclose(
+            tensor_protocol.target_rdm(A),
+            dense_protocol.target_rdm(A),
+            atol=2e-14,
+            rtol=1e-13,
+        )
+
+    def test_fast_target_source_fixed_point_matches_dense_target_source(self) -> None:
+        A, _ = random_left_canonical(d=2, D=3, seed=85)
+        dense_protocol = replace(
+            NONINTEGRABLE_ISING,
+            target_source_fixed_point_solver="dense",
+        )
+        fast_protocol = replace(
+            NONINTEGRABLE_ISING,
+            target_source_fixed_point_solver="fast",
+        )
+        np.testing.assert_allclose(
+            fast_protocol.target_rdm(A),
+            dense_protocol.target_rdm(A),
+            atol=1e-10,
+            rtol=1e-10,
+        )
+
     def test_odd_protocol_averages_asymmetric_reductions(self) -> None:
         A, _ = random_left_canonical(d=2, D=2, seed=77)
         protocol = replace(

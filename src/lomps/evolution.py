@@ -28,7 +28,7 @@ from .embedding import (
     product_circuit_left_canonical_seed,
 )
 from .fixed_target_cg import optimize_fixed_target_cg
-from .optimizer import CGOptions, LMOptions, optimize_tensor
+from .optimizer import CGOptions, LMOptions, optimizer_right_fixed_point, optimize_tensor
 from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
 
 
@@ -50,9 +50,47 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--initial-seed-A",
+        type=Path,
+        default=None,
+        help=(
+            "Optional optimizer seed tensor. The physical first target is still "
+            "built from --initial-A; this tensor only initializes the trajectory "
+            "manifold and is lifted if its bond dimension is smaller."
+        ),
+    )
+    parser.add_argument(
+        "--initial-seed-lift-noise-amplitude",
+        type=float,
+        default=None,
+        help=(
+            "Noise for lifting --initial-seed-A to --bond-dimension. If omitted, "
+            "uses 1e-4 for trajectory D>=20 and --embedding-noise-amplitude otherwise."
+        ),
+    )
+    parser.add_argument(
         "--odd-parity-warning-threshold",
         type=float,
         default=NONINTEGRABLE_ISING.odd_parity_warning_threshold,
+    )
+    parser.add_argument(
+        "--target-contraction",
+        choices=("tensor", "dense"),
+        default=NONINTEGRABLE_ISING.target_contraction,
+        help=(
+            "How to build evolved finite-window targets. 'tensor' applies "
+            "local gates to density-tensor axes without materializing the full "
+            "brickwall unitary; 'dense' keeps the old dense-unitary path."
+        ),
+    )
+    parser.add_argument(
+        "--target-source-fixed-point-solver",
+        choices=("dense", "fast"),
+        default=NONINTEGRABLE_ISING.target_source_fixed_point_solver,
+        help=(
+            "Fixed-point solver used only when building the evolved light-cone "
+            "target. This can be set independently from --fixed-point-solver."
+        ),
     )
     parser.add_argument("--accept-cost", type=float, default=3e-16)
     parser.add_argument("--rank-tolerance", type=float, default=1e-12)
@@ -199,6 +237,20 @@ def atomic_npy(path: Path, value: np.ndarray) -> None:
     temporary.replace(path)
 
 
+def fixed_point_info_json(info: dict[str, float | complex]) -> dict[str, float]:
+    """Return JSON-safe fixed-point diagnostics."""
+
+    result: dict[str, float] = {}
+    for key, value in info.items():
+        if isinstance(value, (complex, np.complexfloating)):
+            complex_value = complex(value)
+            result[f"{key}_real"] = float(complex_value.real)
+            result[f"{key}_imag"] = float(complex_value.imag)
+        else:
+            result[key] = float(value)
+    return result
+
+
 def append_csv(path: Path, row: dict[str, Any]) -> None:
     exists = path.exists()
     with path.open("a", newline="") as handle:
@@ -228,6 +280,21 @@ def parse_seed_list(text: str) -> tuple[int, ...]:
             seeds.append(seed)
             seen.add(seed)
     return tuple(seeds)
+
+
+def effective_initial_seed_lift_noise(
+    *,
+    requested: float | None,
+    trajectory_bond_dimension: int,
+    embedding_noise_amplitude: float,
+) -> float:
+    """Return the external-seed lift noise after applying LOMPS defaults."""
+
+    if requested is not None:
+        return float(requested)
+    if trajectory_bond_dimension >= 20:
+        return 1e-4
+    return float(embedding_noise_amplitude)
 
 
 def options(
@@ -299,6 +366,8 @@ def protocol_from_args(args: argparse.Namespace):
         name=f"nonintegrable_ising_L{args.block_length}",
         block_length=args.block_length,
         odd_parity_warning_threshold=args.odd_parity_warning_threshold,
+        target_contraction=args.target_contraction,
+        target_source_fixed_point_solver=args.target_source_fixed_point_solver,
     )
     # Touch the derived property early so invalid protocols fail before any
     # checkpoint files are created.
@@ -445,6 +514,27 @@ def select_initial_seed(
     return best[1], best[2], rows
 
 
+def select_external_initial_seed(
+    seed_source: np.ndarray,
+    trajectory_bond_dimension: int,
+    *,
+    protocol: LocalEvolutionProtocol,
+    lift_noise_amplitude: float,
+    embedding_seed: int,
+    canonical_tolerance: float,
+) -> tuple[np.ndarray, InitialLiftDiagnostics]:
+    """Use an explicit optimizer seed, lifting it to the trajectory D if needed."""
+
+    return lift_left_canonical_seed(
+        seed_source,
+        trajectory_bond_dimension,
+        noise_amplitude=lift_noise_amplitude,
+        seed=embedding_seed,
+        diagnostic_block_length=protocol.block_length,
+        canonical_tolerance=canonical_tolerance,
+    )
+
+
 def fit_fixed_target(
     seed: np.ndarray,
     target: np.ndarray,
@@ -534,13 +624,32 @@ def main() -> None:
         raise ValueError("invalid first-step CG iteration controls")
     if args.first_step_cg_seconds < 0:
         raise ValueError("--first-step-cg-seconds must be non-negative")
+    if (
+        args.initial_seed_lift_noise_amplitude is not None
+        and args.initial_seed_lift_noise_amplitude <= 0
+    ):
+        raise ValueError("--initial-seed-lift-noise-amplitude must be positive")
     protocol = protocol_from_args(args)
     amplitudes = tuple(float(value) for value in args.perturb_amplitudes.split(","))
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
         raise ValueError("invalid restart counts or amplitudes")
     initial_source = load_initial(args.initial_A)
+    initial_seed_source = (
+        None if args.initial_seed_A is None else load_initial(args.initial_seed_A)
+    )
     trajectory_bond_dimension = (
-        initial_source.shape[1] if args.bond_dimension <= 0 else args.bond_dimension
+        (
+            initial_seed_source.shape[1]
+            if initial_seed_source is not None
+            else initial_source.shape[1]
+        )
+        if args.bond_dimension <= 0
+        else args.bond_dimension
+    )
+    initial_seed_lift_noise_amplitude = effective_initial_seed_lift_noise(
+        requested=args.initial_seed_lift_noise_amplitude,
+        trajectory_bond_dimension=trajectory_bond_dimension,
+        embedding_noise_amplitude=args.embedding_noise_amplitude,
     )
     primary, strict = options(
         args.accept_cost,
@@ -560,6 +669,10 @@ def main() -> None:
         "target_margins": protocol.target_margins,
         "fixed_target": True,
         "trajectory_bond_dimension": trajectory_bond_dimension,
+        "initial_seed_A": (
+            None if args.initial_seed_A is None else str(args.initial_seed_A.resolve())
+        ),
+        "initial_seed_lift_noise_amplitude": initial_seed_lift_noise_amplitude,
         "fixed_point_solver": args.fixed_point_solver,
         "accept_cost": args.accept_cost,
         "initial_seed_mode": args.initial_seed_mode,
@@ -585,9 +698,14 @@ def main() -> None:
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
     states_path = output / "states.npy"
+    right_fixed_points_path = output / "right_fixed_points.npy"
     times_path = output / "times.npy"
     initial_source_path = output / "initial_source.npy"
+    initial_source_right_fixed_point_path = (
+        output / "initial_source_right_fixed_point.npy"
+    )
     initial_seed_path = output / "initial_seed.npy"
+    initial_seed_source_path = output / "initial_seed_source.npy"
     steps_path = output / "steps.csv"
     restarts_path = output / "restart_trials.csv"
     metadata_path = output / "metadata.json"
@@ -599,7 +717,21 @@ def main() -> None:
             raise ValueError("run policy or requested length differs from checkpoint")
         completed = int(metadata["completed_steps"])
         states = np.lib.format.open_memmap(states_path, mode="r+")
+        right_fixed_points = np.lib.format.open_memmap(
+            right_fixed_points_path,
+            mode="r+",
+        )
         initial_source = np.load(initial_source_path, allow_pickle=False)
+        if initial_source_right_fixed_point_path.exists():
+            initial_source_r = np.load(
+                initial_source_right_fixed_point_path,
+                allow_pickle=False,
+            )
+        else:
+            initial_source_r, _ = optimizer_right_fixed_point(
+                initial_source,
+                protocol.target_source_fixed_point_solver,
+            )
         A = states[completed].copy()
         metadata["status"] = "running"
         metadata["resumed_at"] = utc_now()
@@ -607,32 +739,62 @@ def main() -> None:
     else:
         if states_path.exists() or metadata_path.exists():
             raise FileExistsError("output exists; use --resume or a new output directory")
-        initial_seed, initial_lift, lift_screen = select_initial_seed(
-            initial_source,
-            trajectory_bond_dimension,
-            protocol=protocol,
-            primary=primary,
-            initial_seed_mode=args.initial_seed_mode,
-            embedding_noise_amplitude=args.embedding_noise_amplitude,
-            embedding_seed=args.embedding_seed,
-            embedding_candidate_seeds=embedding_candidate_seeds,
-            embedding_screen_max_iterations=args.embedding_screen_max_iterations,
-            embedding_screen_seconds=args.embedding_screen_seconds,
-            embedding_screen_fixed_point_solver=args.embedding_screen_fixed_point_solver,
-            circuit_lift_mixing_amplitude=args.circuit_lift_mixing_amplitude,
-            circuit_lift_seed=args.circuit_lift_seed,
-            canonical_tolerance=args.initial_canonical_tolerance,
-        )
+        if initial_seed_source is None:
+            initial_seed, initial_lift, lift_screen = select_initial_seed(
+                initial_source,
+                trajectory_bond_dimension,
+                protocol=protocol,
+                primary=primary,
+                initial_seed_mode=args.initial_seed_mode,
+                embedding_noise_amplitude=args.embedding_noise_amplitude,
+                embedding_seed=args.embedding_seed,
+                embedding_candidate_seeds=embedding_candidate_seeds,
+                embedding_screen_max_iterations=args.embedding_screen_max_iterations,
+                embedding_screen_seconds=args.embedding_screen_seconds,
+                embedding_screen_fixed_point_solver=args.embedding_screen_fixed_point_solver,
+                circuit_lift_mixing_amplitude=args.circuit_lift_mixing_amplitude,
+                circuit_lift_seed=args.circuit_lift_seed,
+                canonical_tolerance=args.initial_canonical_tolerance,
+            )
+        else:
+            initial_seed, initial_lift = select_external_initial_seed(
+                initial_seed_source,
+                trajectory_bond_dimension,
+                protocol=protocol,
+                lift_noise_amplitude=initial_seed_lift_noise_amplitude,
+                embedding_seed=args.embedding_seed,
+                canonical_tolerance=args.initial_canonical_tolerance,
+            )
+            lift_screen = []
         states = np.lib.format.open_memmap(
             states_path,
             mode="w+",
             dtype=np.complex128,
             shape=(args.steps + 1, *initial_seed.shape),
         )
+        right_fixed_points = np.lib.format.open_memmap(
+            right_fixed_points_path,
+            mode="w+",
+            dtype=np.complex128,
+            shape=(args.steps + 1, initial_seed.shape[1], initial_seed.shape[2]),
+        )
+        initial_source_r, initial_source_r_info = optimizer_right_fixed_point(
+            initial_source,
+            protocol.target_source_fixed_point_solver,
+        )
+        initial_seed_r, initial_seed_r_info = optimizer_right_fixed_point(
+            initial_seed,
+            protocol.target_source_fixed_point_solver,
+        )
         states[0] = initial_seed
+        right_fixed_points[0] = initial_seed_r
         states.flush()
+        right_fixed_points.flush()
         atomic_npy(initial_source_path, initial_source)
+        atomic_npy(initial_source_right_fixed_point_path, initial_source_r)
         atomic_npy(initial_seed_path, initial_seed)
+        if initial_seed_source is not None:
+            atomic_npy(initial_seed_source_path, initial_seed_source)
         atomic_npy(
             times_path,
             args.base_time + protocol.delta_t * np.arange(args.steps + 1),
@@ -643,10 +805,33 @@ def main() -> None:
             "status": "running",
             "created_at": utc_now(),
             "initial_A": str(args.initial_A.resolve()),
+            "initial_seed_A": (
+                None
+                if args.initial_seed_A is None
+                else str(args.initial_seed_A.resolve())
+            ),
             "initial_source_store": initial_source_path.name,
+            "initial_source_right_fixed_point_store": (
+                initial_source_right_fixed_point_path.name
+            ),
             "initial_seed_store": initial_seed_path.name,
+            "right_fixed_points_store": right_fixed_points_path.name,
+            "initial_seed_source_store": (
+                None if initial_seed_source is None else initial_seed_source_path.name
+            ),
             "initial_source_shape": list(initial_source.shape),
+            "initial_source_right_fixed_point_shape": list(initial_source_r.shape),
+            "initial_seed_source_shape": (
+                None if initial_seed_source is None else list(initial_seed_source.shape)
+            ),
             "initial_seed_shape": list(initial_seed.shape),
+            "right_fixed_points_shape": list(right_fixed_points.shape),
+            "initial_source_right_fixed_point_info": fixed_point_info_json(
+                initial_source_r_info
+            ),
+            "initial_seed_right_fixed_point_info": fixed_point_info_json(
+                initial_seed_r_info
+            ),
             "initial_lift": asdict(initial_lift),
             "initial_lift_screen": lift_screen,
             "steps": args.steps,
@@ -674,8 +859,13 @@ def main() -> None:
             # This target is computed exactly once.  Every rescue trial below
             # minimizes against this unchanged matrix.
             target_source = initial_source if step == 1 else A
+            target_source_r = (
+                initial_source_r
+                if step == 1
+                else np.asarray(right_fixed_points[completed], dtype=np.complex128)
+            )
             target_source_kind = "initial_source" if step == 1 else "trajectory_state"
-            target = protocol.target_rdm(target_source)
+            target = protocol.target_rdm(target_source, target_source_r)
             use_first_step_cg = (
                 args.first_step_optimizer == "cg-lm"
                 and step == 1
@@ -765,7 +955,6 @@ def main() -> None:
                     if candidate_result.cost < result.cost:
                         next_A, result = candidate_A, candidate_result
 
-            step_seconds = time.perf_counter() - started
             if result.cost > args.accept_cost:
                 status = "failed_fixed_target_multistart"
                 metadata["failure"] = {
@@ -779,7 +968,14 @@ def main() -> None:
                 break
 
             A = next_A
+            A_r, A_r_info = optimizer_right_fixed_point(
+                A,
+                protocol.target_source_fixed_point_solver,
+            )
+            A_r_info_json = fixed_point_info_json(A_r_info)
+            step_seconds = time.perf_counter() - started
             states[step] = A
+            right_fixed_points[step] = A_r
             completed = step
             cumulative_seconds += step_seconds
             append_csv(
@@ -816,6 +1012,8 @@ def main() -> None:
                     "target_residual": result.residual_norm,
                     "optimizer_status": result.status,
                     "optimizer_evaluations": len(result.history),
+                    "right_fixed_point_residual": A_r_info_json["residual"],
+                    "right_fixed_point_min_eigenvalue": A_r_info_json["min_eigenvalue"],
                     "warm_used_strict_retry": used_strict,
                     "restart_used": restart_used,
                     "accepted_seed_kind": accepted_kind,
@@ -828,6 +1026,7 @@ def main() -> None:
             )
             if step % args.checkpoint_every == 0 or restart_used or step == args.steps:
                 states.flush()
+                right_fixed_points.flush()
                 metadata.update(
                     {
                         "status": "running",
@@ -849,6 +1048,7 @@ def main() -> None:
         status = "paused_by_keyboard_interrupt"
     finally:
         states.flush()
+        right_fixed_points.flush()
         if completed == args.steps:
             status = "completed"
         metadata.update(

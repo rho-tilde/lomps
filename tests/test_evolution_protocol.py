@@ -11,12 +11,14 @@ import numpy as np
 
 from lomps.canonical import random_left_canonical
 from lomps.evolution import (
+    effective_initial_seed_lift_noise,
     first_step_cg_options,
     infer_block_length,
     options,
     parse_args,
     parse_seed_list,
     protocol_from_args,
+    select_external_initial_seed,
     select_initial_seed,
 )
 from lomps.embedding import product_tensor
@@ -24,15 +26,26 @@ from lomps.protocol import NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
 
 
+def protocol_args(block_length: int = 4) -> Namespace:
+    return Namespace(
+        block_length=block_length,
+        odd_parity_warning_threshold=1e-6,
+        target_contraction=NONINTEGRABLE_ISING.target_contraction,
+        target_source_fixed_point_solver=(
+            NONINTEGRABLE_ISING.target_source_fixed_point_solver
+        ),
+    )
+
+
 class EvolutionProtocolTests(unittest.TestCase):
     def test_configured_l4_protocol_matches_reference_protocol(self) -> None:
         A, _ = random_left_canonical(d=2, D=2, seed=81)
-        protocol = protocol_from_args(
-            Namespace(block_length=4, odd_parity_warning_threshold=1e-6)
-        )
+        protocol = protocol_from_args(protocol_args())
         self.assertEqual(protocol.block_length, NONINTEGRABLE_ISING.block_length)
         self.assertEqual(protocol.lightcone_sites, NONINTEGRABLE_ISING.lightcone_sites)
         self.assertEqual(protocol.target_margins, NONINTEGRABLE_ISING.target_margins)
+        self.assertEqual(protocol.target_contraction, "tensor")
+        self.assertEqual(protocol.target_source_fixed_point_solver, "dense")
         np.testing.assert_allclose(
             protocol.target_rdm(A),
             NONINTEGRABLE_ISING.target_rdm(A),
@@ -47,9 +60,7 @@ class EvolutionProtocolTests(unittest.TestCase):
             root / "data" / "nonintegrable_d12_trajectory" / "trajectory_states.npy",
             mmap_mode="r",
         )
-        protocol = protocol_from_args(
-            Namespace(block_length=4, odd_parity_warning_threshold=1e-6)
-        )
+        protocol = protocol_from_args(protocol_args())
 
         states = [initial] + [trajectory[index] for index in range(4)]
         for index, A in enumerate(states):
@@ -97,9 +108,39 @@ class EvolutionProtocolTests(unittest.TestCase):
             args = parse_args()
         self.assertEqual(args.initial_seed_mode, "embedding")
         self.assertEqual(args.embedding_noise_amplitude, 1e-8)
+        self.assertIsNone(args.initial_seed_A)
+        self.assertIsNone(args.initial_seed_lift_noise_amplitude)
+        self.assertEqual(args.target_contraction, "tensor")
+        self.assertEqual(args.target_source_fixed_point_solver, "dense")
         self.assertEqual(args.first_step_optimizer, "cg-lm")
         self.assertTrue(args.first_step_cg_precondition)
         self.assertFalse(args.first_step_cg_verbose)
+
+    def test_external_seed_lift_noise_default_is_larger_for_high_D(self) -> None:
+        self.assertEqual(
+            effective_initial_seed_lift_noise(
+                requested=None,
+                trajectory_bond_dimension=20,
+                embedding_noise_amplitude=1e-8,
+            ),
+            1e-4,
+        )
+        self.assertEqual(
+            effective_initial_seed_lift_noise(
+                requested=None,
+                trajectory_bond_dimension=19,
+                embedding_noise_amplitude=3e-8,
+            ),
+            3e-8,
+        )
+        self.assertEqual(
+            effective_initial_seed_lift_noise(
+                requested=5e-5,
+                trajectory_bond_dimension=20,
+                embedding_noise_amplitude=1e-8,
+            ),
+            5e-5,
+        )
 
     def test_first_step_cg_options_follow_main_solver_by_default(self) -> None:
         argv = [
@@ -208,6 +249,22 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertEqual(seed.shape, (2, 12, 12))
         self.assertEqual(screen, [])
         self.assertEqual(diagnostics.method, "product_circuit")
+
+    def test_external_seed_can_be_lifted_independently_from_product_source(self) -> None:
+        source_seed, _ = random_left_canonical(d=2, D=3, seed=84)
+        seed, diagnostics = select_external_initial_seed(
+            source_seed,
+            5,
+            protocol=NONINTEGRABLE_ISING,
+            lift_noise_amplitude=1e-4,
+            embedding_seed=104729,
+            canonical_tolerance=1e-10,
+        )
+        self.assertEqual(seed.shape, (2, 5, 5))
+        self.assertEqual(diagnostics.source_bond_dimension, 3)
+        self.assertEqual(diagnostics.target_bond_dimension, 5)
+        self.assertEqual(diagnostics.noise_amplitude, 1e-4)
+        self.assertLess(diagnostics.seed_left_canonical_error, 1e-10)
 
 
 if __name__ == "__main__":

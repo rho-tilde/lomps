@@ -73,6 +73,79 @@ def second_order_brickwall_unitary(
     return even_layer @ odd_layer @ even_layer
 
 
+def apply_two_site_gate_to_density_tensor(
+    rho_tensor: Array,
+    gate: Array,
+    *,
+    site: int,
+) -> Array:
+    """Apply ``gate rho gate^dagger`` to neighboring tensor sites.
+
+    ``rho_tensor`` has axes ``ket_0...ket_N-1, bra_0...bra_N-1``.  This helper
+    avoids materializing the full many-site brickwall unitary.
+    """
+
+    rho_tensor = np.asarray(rho_tensor, dtype=np.complex128)
+    gate = np.asarray(gate, dtype=np.complex128)
+    if rho_tensor.ndim % 2:
+        raise ValueError("density tensor must have balanced ket/bra axes")
+    sites = rho_tensor.ndim // 2
+    if site < 0 or site + 1 >= sites:
+        raise IndexError("two-site gate outside density tensor")
+    d = rho_tensor.shape[site]
+    if any(axis != d for axis in rho_tensor.shape):
+        raise ValueError("all physical axes must have the same dimension")
+    gate_tensor = gate.reshape(d, d, d, d)
+
+    def apply_pair(tensor: Array, axes: tuple[int, int], op: Array) -> Array:
+        contracted = np.tensordot(op, tensor, axes=([2, 3], list(axes)))
+        remaining = [axis for axis in range(tensor.ndim) if axis not in axes]
+        labels = [""] * tensor.ndim
+        labels[axes[0]] = "new0"
+        labels[axes[1]] = "new1"
+        for offset, axis in enumerate(remaining):
+            labels[axis] = offset
+        order = [
+            0 if label == "new0" else 1 if label == "new1" else 2 + int(label)
+            for label in labels
+        ]
+        return np.transpose(contracted, order)
+
+    tensor = apply_pair(rho_tensor, (site, site + 1), gate_tensor)
+    tensor = apply_pair(
+        tensor,
+        (sites + site, sites + site + 1),
+        gate_tensor.conj(),
+    )
+    return tensor.astype(np.complex128)
+
+
+def second_order_brickwall_density(
+    rho: Array,
+    U_half: Array,
+    U_full: Array,
+    *,
+    sites: int,
+) -> Array:
+    """Apply the second-order brickwall circuit to a density matrix tensorially."""
+
+    rho = np.asarray(rho, dtype=np.complex128)
+    dimension = rho.shape[0]
+    d = round(dimension ** (1.0 / sites))
+    if sites % 2:
+        raise ValueError("requires an even site count")
+    if rho.shape != (d**sites, d**sites):
+        raise ValueError("rho shape is incompatible with the site count")
+    tensor = rho.reshape((d,) * (2 * sites))
+    for site in range(0, sites, 2):
+        tensor = apply_two_site_gate_to_density_tensor(tensor, U_half, site=site)
+    for site in range(1, sites - 1, 2):
+        tensor = apply_two_site_gate_to_density_tensor(tensor, U_full, site=site)
+    for site in range(0, sites, 2):
+        tensor = apply_two_site_gate_to_density_tensor(tensor, U_half, site=site)
+    return tensor.reshape(dimension, dimension)
+
+
 def partial_trace_sites(
     rho: Array,
     *,

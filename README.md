@@ -15,6 +15,8 @@ The core implementation provides:
   ARPACK option for exploratory runs;
 - configurable second-order non-integrable Ising quench protocols, with
   symmetric even-`L` and parity-averaged odd-`L` local windows;
+- tensor-axis target evolution that applies the Trotter gates locally instead
+  of materializing the full light-cone brickwall unitary;
 - historical-style analytic fixed-target CG for the first lifted product-state
   update, followed by an LM polish;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
@@ -99,6 +101,14 @@ comma-separated list of lift seeds, screens them against the exact first target
 with a bounded optimizer pass, and uses the seed with the lowest screening
 cost.
 
+When a separate high-D optimizer seed is already available, pass it with
+`--initial-seed-A`. The physical first target is still built from
+`--initial-A`; `--initial-seed-A` only initializes the trajectory manifold and
+is lifted to `--bond-dimension` if needed. The external seed lift uses
+`--initial-seed-lift-noise-amplitude` when supplied. If that option is omitted,
+LOMPS uses `1e-4` for trajectory bond dimensions `D>=20` and otherwise reuses
+`--embedding-noise-amplitude`.
+
 The product-circuit seed is still available as an explicit opt-in with
 `--initial-seed-mode circuit`, or through `--initial-seed-mode auto` when
 available. In the qubit L=4 protocol this gives a D=12 seed: the
@@ -120,6 +130,21 @@ by default. This uses the dense eigensolver and is intended for reproducible
 production/reference trajectories. `--fixed-point-solver fast` uses ARPACK
 first and may be useful for exploratory runs, but tiny non-bitwise differences
 can appear between repeated runs.
+
+Each saved trajectory tensor also stores its right transfer fixed point in
+`right_fixed_points.npy`, aligned with `states.npy`. The next timestep reuses
+this cached boundary when constructing the light-cone target, so accepted
+trajectory states are checkpointed together with the fixed point needed to
+evolve them. The first physical source has its own
+`initial_source_right_fixed_point.npy`, because product-state launches build
+the first target from `--initial-A`, not from the lifted trajectory seed.
+
+Target construction uses `--target-contraction tensor` by default. This applies
+the local Trotter gates directly to density-tensor axes and avoids building the
+full light-cone unitary; `--target-contraction dense` keeps the old
+`U rho U^\dagger` implementation as a regression path. The fixed point used
+when filling or falling back from the target-source cache is controlled
+separately by `--target-source-fixed-point-solver`.
 
 See [docs/algorithm.md](docs/algorithm.md) for the mathematical outline and
 the TOML files in [configs](configs/) for the reference parameters.
