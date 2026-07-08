@@ -312,7 +312,7 @@ def lift_left_canonical_seed(
     source: Array,
     target_bond_dimension: int,
     *,
-    noise_amplitude: float = 1e-4,
+    noise_amplitude: float = 1e-8,
     seed: int = 104_729,
     diagnostic_block_length: int = 1,
     canonical_tolerance: float = 1e-10,
@@ -322,6 +322,10 @@ def lift_left_canonical_seed(
     The returned seed is only an optimizer starting point. The physical first
     target should still be built from ``source`` when the source bond dimension
     is smaller than the trajectory bond dimension.
+
+    The default noise amplitude follows the historical QDMT product-state
+    start: embed into the upper-left virtual block, add tiny noise in the new
+    virtual subspace, and QR-project back to the canonical manifold.
     """
 
     source = coerce_initial_tensor(source)

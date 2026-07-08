@@ -102,6 +102,22 @@ class LMResult:
     history: tuple[LMRecord, ...]
 
 
+@dataclass(frozen=True)
+class CGOptions:
+    """Numerical controls for Grassmann conjugate-gradient initialization."""
+
+    max_iterations: int = 40_000
+    gradient_tolerance: float = 1e-11
+    cost_tolerance: float = 3e-16
+    rank_tolerance: float = 1e-10
+    initial_step: float | None = None
+    precondition: bool = True
+    restart: int = 100
+    maximum_seconds: float = 900.0
+    fixed_point_solver: FixedPointSolver = "dense"
+    verbose: bool = True
+
+
 def _safe_svd(matrix: Array, *, full_matrices: bool) -> tuple[Array, Array, Array]:
     try:
         return la.svd(
@@ -145,6 +161,16 @@ def gauge_orthogonal_basis(A: Array, W: Array, tolerance: float) -> list[Array]:
         ).reshape(W.shape, order="F")
         basis.append(direction.astype(np.complex128))
     return basis
+
+
+def _real_metric(X: Array, Y: Array) -> float:
+    return float(np.real(np.trace(np.asarray(X).conj().T @ np.asarray(Y))))
+
+
+def grassmann_project(W: Array, X: Array) -> Array:
+    """Project a matrix onto the Grassmann-horizontal Stiefel tangent."""
+
+    return X - W @ (W.conj().T @ X)
 
 
 def batched_rdm_jacobian(

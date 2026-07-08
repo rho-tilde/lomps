@@ -12,7 +12,9 @@ from .embedding import (
     product_circuit_left_canonical_seed,
     product_tensor,
 )
+from .fixed_target_cg import FixedTargetGrassmannCG, optimize_fixed_target_cg
 from .optimizer import (
+    CGOptions,
     LMOptions,
     LMResult,
     optimizer_right_fixed_point,
@@ -24,6 +26,7 @@ from .rdm import block_rdm
 __all__ = [
     "LMOptions",
     "LMResult",
+    "CGOptions",
     "LocalEvolutionProtocol",
     "NONINTEGRABLE_ISING",
     "block_rdm",
@@ -33,6 +36,8 @@ __all__ = [
     "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "FixedTargetGrassmannCG",
+    "optimize_fixed_target_cg",
     "product_circuit_left_canonical_seed",
     "product_tensor",
     "quotient_tangent_dimension",

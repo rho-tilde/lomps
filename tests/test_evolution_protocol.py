@@ -5,13 +5,16 @@ import contextlib
 import io
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from lomps.canonical import random_left_canonical
 from lomps.evolution import (
+    first_step_cg_options,
     infer_block_length,
     options,
+    parse_args,
     parse_seed_list,
     protocol_from_args,
     select_initial_seed,
@@ -77,6 +80,51 @@ class EvolutionProtocolTests(unittest.TestCase):
     def test_parse_seed_list_deduplicates_and_ignores_blanks(self) -> None:
         self.assertEqual(parse_seed_list(" 2, , 5,2,8 "), (2, 5, 8))
         self.assertEqual(parse_seed_list(""), ())
+
+    def test_product_start_defaults_to_historical_embedding_seed(self) -> None:
+        argv = [
+            "lomps-evolve",
+            "--initial-A",
+            "product.npy",
+            "--output-dir",
+            "out",
+            "--steps",
+            "1",
+            "--base-time",
+            "0.0",
+        ]
+        with patch("sys.argv", argv):
+            args = parse_args()
+        self.assertEqual(args.initial_seed_mode, "embedding")
+        self.assertEqual(args.embedding_noise_amplitude, 1e-8)
+        self.assertEqual(args.first_step_optimizer, "cg-lm")
+        self.assertTrue(args.first_step_cg_precondition)
+        self.assertFalse(args.first_step_cg_verbose)
+
+    def test_first_step_cg_options_follow_main_solver_by_default(self) -> None:
+        argv = [
+            "lomps-evolve",
+            "--initial-A",
+            "product.npy",
+            "--output-dir",
+            "out",
+            "--steps",
+            "1",
+            "--base-time",
+            "0.0",
+            "--fixed-point-solver",
+            "fast",
+        ]
+        with patch("sys.argv", argv):
+            args = parse_args()
+        cg_options = first_step_cg_options(
+            args,
+            accept_cost=3e-16,
+            rank_tolerance=1e-12,
+            default_fixed_point_solver=args.fixed_point_solver,
+        )
+        self.assertEqual(cg_options.fixed_point_solver, "fast")
+        self.assertEqual(cg_options.cost_tolerance, 3e-16)
 
     def test_same_bond_initial_seed_skips_candidate_screening(self) -> None:
         source, _ = random_left_canonical(d=2, D=3, seed=83)

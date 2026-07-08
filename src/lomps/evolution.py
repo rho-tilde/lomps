@@ -27,7 +27,8 @@ from .embedding import (
     lift_left_canonical_seed,
     product_circuit_left_canonical_seed,
 )
-from .optimizer import LMOptions, optimize_tensor
+from .fixed_target_cg import optimize_fixed_target_cg
+from .optimizer import CGOptions, LMOptions, optimize_tensor
 from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
 
 
@@ -68,16 +69,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perturbations-per-amplitude", type=int, default=2)
     parser.add_argument("--random-restarts", type=int, default=12)
     parser.add_argument("--random-seed", type=int, default=20260702)
-    parser.add_argument("--embedding-noise-amplitude", type=float, default=1e-4)
+    parser.add_argument(
+        "--embedding-noise-amplitude",
+        type=float,
+        default=1e-8,
+        help=(
+            "Noise used only to form the lifted optimizer seed. The first "
+            "RDM target is still built from the original input source."
+        ),
+    )
     parser.add_argument("--embedding-seed", type=int, default=104_729)
     parser.add_argument(
         "--initial-seed-mode",
         choices=("auto", "embedding", "circuit"),
-        default="auto",
+        default="embedding",
         help=(
-            "How to choose the optimizer seed for low-D starts. 'auto' uses "
-            "the product-circuit seed when possible and otherwise falls back "
-            "to the generic embedding seed."
+            "How to choose the optimizer seed for low-D starts. The default "
+            "'embedding' uses the historical noisy product embedding only as "
+            "a start point. 'auto' uses the product-circuit seed when possible "
+            "and otherwise falls back to embedding."
         ),
     )
     parser.add_argument(
@@ -122,6 +132,49 @@ def parse_args() -> argparse.Namespace:
         choices=("same", "dense", "fast"),
         default="same",
         help="Fixed-point solver used for initial-lift screening.",
+    )
+    parser.add_argument(
+        "--first-step-optimizer",
+        choices=("cg-lm", "lm"),
+        default="cg-lm",
+        help=(
+            "Optimizer used for the first low-D-to-high-D target. The default "
+            "'cg-lm' runs analytic fixed-target Grassmann CG and then polishes "
+            "the same target with LM."
+        ),
+    )
+    parser.add_argument("--first-step-cg-max-iterations", type=int, default=40_000)
+    parser.add_argument("--first-step-cg-seconds", type=float, default=900.0)
+    parser.add_argument("--first-step-cg-gradient-tolerance", type=float, default=1e-11)
+    parser.add_argument(
+        "--first-step-cg-initial-step",
+        type=float,
+        default=0.0,
+        help="Initial CG line-search step; non-positive means choose from the gradient norm.",
+    )
+    parser.add_argument(
+        "--first-step-cg-restart",
+        type=int,
+        default=100,
+        help="Restart period for first-step nonlinear CG.",
+    )
+    parser.add_argument(
+        "--first-step-cg-precondition",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the right-fixed-point preconditioner in first-step CG.",
+    )
+    parser.add_argument(
+        "--first-step-cg-verbose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print first-step CG iteration diagnostics.",
+    )
+    parser.add_argument(
+        "--first-step-cg-fixed-point-solver",
+        choices=("same", "dense", "fast"),
+        default="same",
+        help="Fixed-point solver used by first-step CG.",
     )
     parser.add_argument("--initial-canonical-tolerance", type=float, default=1e-10)
     parser.add_argument("--checkpoint-every", type=int, default=25)
@@ -202,6 +255,38 @@ def options(
         plateau_absolute_cost_drop=1e-24,
     )
     return primary, strict
+
+
+def first_step_cg_options(
+    args: argparse.Namespace,
+    *,
+    accept_cost: float,
+    rank_tolerance: float,
+    default_fixed_point_solver: str,
+) -> CGOptions:
+    """Build first-step CG controls from CLI arguments."""
+
+    fixed_point_solver = (
+        default_fixed_point_solver
+        if args.first_step_cg_fixed_point_solver == "same"
+        else args.first_step_cg_fixed_point_solver
+    )
+    return CGOptions(
+        max_iterations=args.first_step_cg_max_iterations,
+        gradient_tolerance=args.first_step_cg_gradient_tolerance,
+        cost_tolerance=accept_cost,
+        rank_tolerance=rank_tolerance,
+        initial_step=(
+            None
+            if args.first_step_cg_initial_step <= 0
+            else args.first_step_cg_initial_step
+        ),
+        precondition=args.first_step_cg_precondition,
+        restart=args.first_step_cg_restart,
+        maximum_seconds=args.first_step_cg_seconds,
+        fixed_point_solver=fixed_point_solver,
+        verbose=args.first_step_cg_verbose,
+    )
 
 
 def protocol_from_args(args: argparse.Namespace):
@@ -380,6 +465,19 @@ def fit_fixed_target(
     return best_A, best, used_strict, time.perf_counter() - started
 
 
+def fit_first_step_with_cg(
+    seed: np.ndarray,
+    target: np.ndarray,
+    cg_options: CGOptions,
+) -> tuple[np.ndarray, object, float]:
+    """Fit the first lifted target with analytic CG before LM polishing."""
+
+    started = time.perf_counter()
+    block_length = infer_block_length(seed, target)
+    A, result = optimize_fixed_target_cg(seed, target, block_length, cg_options)
+    return A, result, time.perf_counter() - started
+
+
 def distant_seeds(
     A: np.ndarray,
     *,
@@ -432,6 +530,10 @@ def main() -> None:
         raise ValueError("steps and checkpoint cadence must be positive")
     if args.accept_cost <= 0:
         raise ValueError("--accept-cost must be positive")
+    if args.first_step_cg_max_iterations < 0 or args.first_step_cg_restart < 1:
+        raise ValueError("invalid first-step CG iteration controls")
+    if args.first_step_cg_seconds < 0:
+        raise ValueError("--first-step-cg-seconds must be non-negative")
     protocol = protocol_from_args(args)
     amplitudes = tuple(float(value) for value in args.perturb_amplitudes.split(","))
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
@@ -444,6 +546,12 @@ def main() -> None:
         args.accept_cost,
         args.rank_tolerance,
         args.fixed_point_solver,
+    )
+    first_step_cg = first_step_cg_options(
+        args,
+        accept_cost=args.accept_cost,
+        rank_tolerance=args.rank_tolerance,
+        default_fixed_point_solver=args.fixed_point_solver,
     )
     embedding_candidate_seeds = parse_seed_list(args.embedding_candidate_seeds)
     policy = {
@@ -463,6 +571,8 @@ def main() -> None:
         "embedding_screen_max_iterations": args.embedding_screen_max_iterations,
         "embedding_screen_seconds": args.embedding_screen_seconds,
         "embedding_screen_fixed_point_solver": args.embedding_screen_fixed_point_solver,
+        "first_step_optimizer": args.first_step_optimizer,
+        "first_step_cg": asdict(first_step_cg),
         "initial_canonical_tolerance": args.initial_canonical_tolerance,
         "perturb_amplitudes": list(amplitudes),
         "perturbations_per_amplitude": args.perturbations_per_amplitude,
@@ -566,12 +676,40 @@ def main() -> None:
             target_source = initial_source if step == 1 else A
             target_source_kind = "initial_source" if step == 1 else "trajectory_state"
             target = protocol.target_rdm(target_source)
-            next_A, result, used_strict, fit_seconds = fit_fixed_target(
-                A, target, primary, strict
+            use_first_step_cg = (
+                args.first_step_optimizer == "cg-lm"
+                and step == 1
+                and initial_source.shape[1] < trajectory_bond_dimension
             )
-            warm_cost = float(result.cost)
+            first_step_cg_result = None
+            first_step_cg_seconds = 0.0
+            if use_first_step_cg:
+                print(
+                    "first-step optimizer=cg-lm target_source=initial_source "
+                    f"source_D={initial_source.shape[1]} trajectory_D={trajectory_bond_dimension}",
+                    flush=True,
+                )
+                cg_A, first_step_cg_result, first_step_cg_seconds = fit_first_step_with_cg(
+                    A, target, first_step_cg
+                )
+                next_A, result, used_strict, polish_seconds = fit_fixed_target(
+                    cg_A, target, primary, strict
+                )
+                fit_seconds = first_step_cg_seconds + polish_seconds
+                warm_cost = float(first_step_cg_result.cost)
+                print(
+                    f"first-step cg cost={first_step_cg_result.cost:.2e} "
+                    f"status={first_step_cg_result.status}; "
+                    f"lm-polish cost={result.cost:.2e} status={result.status}",
+                    flush=True,
+                )
+            else:
+                next_A, result, used_strict, fit_seconds = fit_fixed_target(
+                    A, target, primary, strict
+                )
+                warm_cost = float(result.cost)
             restart_used = False
-            accepted_kind = "warm_start"
+            accepted_kind = "first_step_cg_lm" if use_first_step_cg else "warm_start"
             accepted_trial = -1
             trials = 0
 
@@ -652,6 +790,28 @@ def main() -> None:
                     "target_source": target_source_kind,
                     "target_source_bond_dimension": target_source.shape[1],
                     "warm_start_cost": warm_cost,
+                    "first_step_cg_used": use_first_step_cg,
+                    "first_step_cg_cost": (
+                        float("nan")
+                        if first_step_cg_result is None
+                        else first_step_cg_result.cost
+                    ),
+                    "first_step_cg_target_residual": (
+                        float("nan")
+                        if first_step_cg_result is None
+                        else first_step_cg_result.residual_norm
+                    ),
+                    "first_step_cg_status": (
+                        ""
+                        if first_step_cg_result is None
+                        else first_step_cg_result.status
+                    ),
+                    "first_step_cg_evaluations": (
+                        0
+                        if first_step_cg_result is None
+                        else len(first_step_cg_result.history)
+                    ),
+                    "first_step_cg_seconds": first_step_cg_seconds,
                     "optimizer_cost": result.cost,
                     "target_residual": result.residual_norm,
                     "optimizer_status": result.status,

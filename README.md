@@ -15,6 +15,8 @@ The core implementation provides:
   ARPACK option for exploratory runs;
 - configurable second-order non-integrable Ising quench protocols, with
   symmetric even-`L` and parity-averaged odd-`L` local windows;
+- historical-style analytic fixed-target CG for the first lifted product-state
+  update, followed by an LM polish;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
 
 ## Installation
@@ -77,20 +79,34 @@ constructs a deterministic lifted left-canonical seed at the requested
 trajectory bond dimension. This avoids treating a product state as if it were
 already a healthy injective high-D tensor.
 
-For product starts, `--initial-seed-mode auto` constructs the seed from the
-exact one-step finite Strang circuit whenever the requested bond dimension
-matches the circuit seed dimension. In the qubit L=4 protocol this gives a
-D=12 seed: the two-site-periodic circuit MPS has alternating bond dimensions
-4 and 8, and LOMPS embeds the pair into one off-diagonal one-site tensor. A
-small deterministic Stiefel mixing, controlled by
+For product starts, the default `--initial-seed-mode embedding` follows the
+historical QDMT start-point convention: the product tensor is embedded into
+the upper-left virtual block, tiny deterministic noise is added only in the
+new virtual subspace, and the result is QR-projected back to the canonical
+manifold. This lifted tensor is only the optimizer seed; the first target RDM
+is still built from the original low-D product source. The default lift noise
+is `--embedding-noise-amplitude 1e-8`.
+
+When the input source has lower bond dimension than the trajectory tensor,
+the default `--first-step-optimizer cg-lm` fits this first frozen target with
+the historical-style analytic fixed-target Grassmann CG, then polishes the
+same target with the gauge-orthogonal LM optimizer. This is the recommended
+product-state launch path. Use `--first-step-cg-verbose` to print the CG
+iteration trace for long first-step solves.
+
+For less structured low-D starts, `--embedding-candidate-seeds` accepts a
+comma-separated list of lift seeds, screens them against the exact first target
+with a bounded optimizer pass, and uses the seed with the lowest screening
+cost.
+
+The product-circuit seed is still available as an explicit opt-in with
+`--initial-seed-mode circuit`, or through `--initial-seed-mode auto` when
+available. In the qubit L=4 protocol this gives a D=12 seed: the
+two-site-periodic circuit MPS has alternating bond dimensions 4 and 8, and
+LOMPS embeds the pair into one off-diagonal one-site tensor. A small
+deterministic Stiefel mixing, controlled by
 `--circuit-lift-mixing-amplitude`, breaks the exact period-two transfer
 degeneracy before the first optimizer polish.
-
-The generic embedding path remains available with
-`--initial-seed-mode embedding`. For these less structured low-D starts,
-`--embedding-candidate-seeds` accepts a comma-separated list of lift seeds,
-screens them against the exact first target with a bounded optimizer pass, and
-uses the seed with the lowest screening cost.
 
 For a dimension-count estimate of the smallest bond dimension needed to fit
 generic translation-invariant local data, use

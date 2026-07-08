@@ -8,7 +8,9 @@ import numpy as np
 
 from lomps.canonical import polar_retraction, random_left_canonical, stack_tensor, unstack_tensor
 from lomps.differential import build_jacobian
+from lomps.fixed_target_cg import optimize_fixed_target_cg
 from lomps.optimizer import (
+    CGOptions,
     GaugeOrthogonalLM,
     LMOptions,
     batched_rdm_jacobian,
@@ -44,6 +46,30 @@ class OptimizerTests(unittest.TestCase):
         )
         result = solver.optimize(W0, target)
         self.assertLess(result.residual_norm, 1e-9)
+
+    def test_fixed_target_cg_reduces_nearby_reachable_rdm_cost(self) -> None:
+        A0, W0 = random_left_canonical(d=2, D=2, seed=92)
+        _, W1 = random_left_canonical(d=2, D=2, seed=93)
+        target_A = unstack_tensor(
+            polar_retraction(W0 + 1e-3 * (W1 - W0)),
+            2,
+            2,
+        )
+        target = block_rdm(target_A, 2)
+        seed_cost = float(np.linalg.norm(block_rdm(A0, 2) - target) ** 2)
+        _, result = optimize_fixed_target_cg(
+            A0,
+            target,
+            2,
+            CGOptions(
+                max_iterations=5,
+                gradient_tolerance=0.0,
+                cost_tolerance=0.0,
+                maximum_seconds=30.0,
+                verbose=False,
+            ),
+        )
+        self.assertLess(result.cost, seed_cost)
 
     def test_optimizer_rejects_unknown_fixed_point_solver(self) -> None:
         with self.assertRaises(ValueError):
