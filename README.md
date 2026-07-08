@@ -67,6 +67,13 @@ C = 1/2 ||rho_L(A_fit) - rho_target||_F^2.
 During rescue, `rho_target` is computed once from the current physical state
 and remains fixed across all restart seeds.
 
+For a dimension-count estimate of the smallest bond dimension needed to fit
+generic translation-invariant local data, use
+`minimum_bond_dimension_for_ti_rdm(d, L)`. It compares the quotient tangent
+dimension `2(d - 1)D^2` with the TI-compatible local-RDM dimension
+`d^(2L) - d^(2L-2)`. For qubits this gives `D_min=5` for `L=3` and `D_min=10`
+for `L=4`.
+
 The optimizer evaluates ansatz fixed points with `--fixed-point-solver dense`
 by default. This uses the dense eigensolver and is intended for reproducible
 production/reference trajectories. `--fixed-point-solver fast` uses ARPACK

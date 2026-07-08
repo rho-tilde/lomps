@@ -28,6 +28,23 @@ C(B) = 1/2 ||rho_L(B) - target_L(A)||_F^2.
 The runner warns if the two odd-`L` reductions have a trace distance larger
 than the configured parity warning threshold.
 
+The local matching dimension count uses translation invariance. A generic
+trace-fixed density matrix on `L` sites has `d^(2L) - 1` real degrees of
+freedom, but the TI consistency of the two `(L - 1)`-site marginals leaves
+
+```text
+dim rho_L^TI = d^(2L) - d^(2L - 2).
+```
+
+The uMPS quotient tangent has real dimension `2(d - 1)D^2`, so
+`minimum_bond_dimension_for_ti_rdm(d, L)` returns the smallest `D` satisfying
+
+```text
+2(d - 1)D^2 >= d^(2L) - d^(2L - 2).
+```
+
+For qubits this gives `D_min = 5` at `L = 3` and `D_min = 10` at `L = 4`.
+
 The optimizer constructs the real Stiefel tangent of the left-canonical
 tensor, removes the true infinitesimal MPS gauge tangent, evaluates the
 analytic RDM Jacobian on the remaining horizontal slice, and takes a damped

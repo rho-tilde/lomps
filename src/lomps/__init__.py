@@ -1,6 +1,11 @@
 """LOMPS: local optimization of matrix-product states."""
 
 from .canonical import canonical_errors, random_left_canonical
+from .dimensions import (
+    minimum_bond_dimension_for_ti_rdm,
+    quotient_tangent_dimension,
+    translation_invariant_rdm_dimension,
+)
 from .optimizer import (
     LMOptions,
     LMResult,
@@ -17,9 +22,12 @@ __all__ = [
     "NONINTEGRABLE_ISING",
     "block_rdm",
     "canonical_errors",
+    "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "quotient_tangent_dimension",
     "random_left_canonical",
+    "translation_invariant_rdm_dimension",
 ]
 
 __version__ = "0.1.0"
