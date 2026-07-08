@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 
 from lomps.canonical import random_left_canonical
-from lomps.evolution import infer_block_length, protocol_from_args
+from lomps.evolution import infer_block_length, options, protocol_from_args
 from lomps.protocol import NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
 
@@ -55,6 +55,15 @@ class EvolutionProtocolTests(unittest.TestCase):
             with self.subTest(block_length=block_length):
                 target = block_rdm(A, block_length)
                 self.assertEqual(infer_block_length(A, target), block_length)
+
+    def test_optimizer_options_thread_fixed_point_policy(self) -> None:
+        primary, strict = options(
+            accept_cost=3e-16,
+            rank_tolerance=1e-12,
+            fixed_point_solver="fast",
+        )
+        self.assertEqual(primary.fixed_point_solver, "fast")
+        self.assertEqual(strict.fixed_point_solver, "fast")
 
 
 if __name__ == "__main__":

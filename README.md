@@ -11,6 +11,8 @@ The core implementation provides:
 - finite-block reduced density matrices and analytic directional derivatives;
 - the true MPS gauge tangent and its orthogonal complement;
 - gauge-orthogonal Levenberg--Marquardt updates with polar retraction;
+- reproducible dense fixed-point solves by default, with an explicit fast
+  ARPACK option for exploratory runs;
 - configurable second-order non-integrable Ising quench protocols, with
   symmetric even-`L` and parity-averaged odd-`L` local windows;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
@@ -40,6 +42,7 @@ lomps-run \
   --initial-A data/nonintegrable_d10_t3p235.npy \
   --output-dir runs/d10 \
   --block-length 4 \
+  --fixed-point-solver dense \
   --steps 100 \
   --base-time 3.235
 ```
@@ -63,6 +66,12 @@ C = 1/2 ||rho_L(A_fit) - rho_target||_F^2.
 
 During rescue, `rho_target` is computed once from the current physical state
 and remains fixed across all restart seeds.
+
+The optimizer evaluates ansatz fixed points with `--fixed-point-solver dense`
+by default. This uses the dense eigensolver and is intended for reproducible
+production/reference trajectories. `--fixed-point-solver fast` uses ARPACK
+first and may be useful for exploratory runs, but tiny non-bitwise differences
+can appear between repeated runs.
 
 See [docs/algorithm.md](docs/algorithm.md) for the mathematical outline and
 the TOML files in [configs](configs/) for the reference parameters.

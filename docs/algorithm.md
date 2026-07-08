@@ -34,6 +34,14 @@ analytic RDM Jacobian on the remaining horizontal slice, and takes a damped
 Gauss--Newton/Levenberg--Marquardt step. Each accepted step is returned to the
 left-canonical manifold by polar retraction.
 
+Inside optimizer evaluations, LOMPS computes the ansatz transfer fixed point
+with a selectable policy. The default `dense` policy uses the dense eigensolver
+and is chosen for bitwise reproducibility in production/reference trajectories.
+The optional `fast` policy tries ARPACK first and falls back to dense if the
+iterative fixed point fails validation; this is faster, but repeated runs can
+diverge at the last few floating-point digits because the iterative fixed point
+is not bitwise deterministic.
+
 If the warm-started solve plateaus, LOMPS keeps `target(A)` fixed and restarts
 the same minimization from more distant left-canonical tensors. A restart never
 changes the target; it only changes the optimizer's initial point. The runner

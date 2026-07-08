@@ -12,6 +12,7 @@ A = np.load(root / "data" / "nonintegrable_d12_t0p001.npy")
 options = LMOptions(
     cost_tolerance=3e-16,
     gradient_tolerance=1e-11,
+    fixed_point_solver="dense",
     max_iterations=40_000,
     verbose=False,
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -12,6 +13,7 @@ from lomps.optimizer import (
     LMOptions,
     batched_rdm_jacobian,
     gauge_orthogonal_basis,
+    optimizer_right_fixed_point,
 )
 from lomps.protocol import NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
@@ -19,6 +21,9 @@ from lomps.transfer import right_fixed_point
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_dense_fixed_point_solver_is_default(self) -> None:
+        self.assertEqual(LMOptions().fixed_point_solver, "dense")
+
     def test_lm_recovers_nearby_reachable_rdm(self) -> None:
         A0, W0 = random_left_canonical(d=2, D=2, seed=72)
         A1, _ = random_left_canonical(d=2, D=2, seed=73)
@@ -39,6 +44,44 @@ class OptimizerTests(unittest.TestCase):
         )
         result = solver.optimize(W0, target)
         self.assertLess(result.residual_norm, 1e-9)
+
+    def test_optimizer_rejects_unknown_fixed_point_solver(self) -> None:
+        with self.assertRaises(ValueError):
+            GaugeOrthogonalLM(
+                2,
+                LMOptions(
+                    fixed_point_solver="unknown",  # type: ignore[arg-type]
+                    verbose=False,
+                ),
+            )
+
+    def test_fixed_point_solver_policy_selects_dense_and_fast(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=78)
+        dense, dense_info = optimizer_right_fixed_point(A, "dense")
+        fast, fast_info = optimizer_right_fixed_point(A, "fast")
+        np.testing.assert_allclose(dense, fast, atol=1e-10, rtol=1e-10)
+        self.assertIn("residual", dense_info)
+        self.assertIn("residual", fast_info)
+
+    def test_dense_optimizer_evaluation_is_bitwise_reproducible(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        A = np.load(root / "data" / "nonintegrable_d12_t0p001.npy")
+        target = NONINTEGRABLE_ISING.target_rdm(A)
+        solver = GaugeOrthogonalLM(
+            NONINTEGRABLE_ISING.block_length,
+            LMOptions(
+                cost_tolerance=3e-16,
+                gradient_tolerance=1e-11,
+                fixed_point_solver="dense",
+                verbose=False,
+            ),
+        )
+        first = solver.evaluate(stack_tensor(A), target)
+        second = solver.evaluate(stack_tensor(A), target)
+        self.assertTrue(np.array_equal(first.rho, second.rho))
+        self.assertTrue(np.array_equal(first.jacobian, second.jacobian))
+        self.assertTrue(np.array_equal(first.gradient, second.gradient))
+        self.assertEqual(first.cost, second.cost)
 
     def test_batched_jacobian_matches_columnwise_jacobian(self) -> None:
         A, W = random_left_canonical(d=2, D=2, seed=75)

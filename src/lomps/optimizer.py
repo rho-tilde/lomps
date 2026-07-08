@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
+from typing import Literal
 
 import numpy as np
 import scipy.linalg as la
@@ -32,6 +33,7 @@ from .transfer import (
 
 
 Array = np.ndarray
+FixedPointSolver = Literal["dense", "fast"]
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ class LMOptions:
     plateau_relative_cost_drop: float = 1e-4
     plateau_absolute_cost_drop: float = 1e-20
     maximum_seconds: float = 600.0
+    fixed_point_solver: FixedPointSolver = "dense"
     verbose: bool = True
 
 
@@ -273,12 +276,34 @@ def fast_right_fixed_point(A: Array) -> tuple[Array, dict[str, float | complex]]
         return right_fixed_point(A)
 
 
+def optimizer_right_fixed_point(
+    A: Array,
+    solver: FixedPointSolver,
+) -> tuple[Array, dict[str, float | complex]]:
+    """Return the ansatz fixed point with the requested optimizer policy.
+
+    ``dense`` uses the deterministic dense eigensolver. ``fast`` uses ARPACK
+    first and falls back to dense if the iterative solve fails validation.
+    """
+
+    if solver == "dense":
+        return right_fixed_point(A)
+    if solver == "fast":
+        return fast_right_fixed_point(A)
+    raise ValueError("fixed_point_solver must be 'dense' or 'fast'")
+
+
 class GaugeOrthogonalLM:
     """Damped Gauss--Newton/LM solver on the MPS quotient tangent."""
 
     def __init__(self, block_length: int, options: LMOptions | None = None):
         self.block_length = int(block_length)
         self.options = options or LMOptions()
+        if self.options.fixed_point_solver not in ("dense", "fast"):
+            raise ValueError("fixed_point_solver must be 'dense' or 'fast'")
+
+    def _right_fixed_point(self, A: Array) -> tuple[Array, dict[str, float | complex]]:
+        return optimizer_right_fixed_point(A, self.options.fixed_point_solver)
 
     def evaluate(self, W: Array, rho_target: Array) -> LMEvaluation:
         W = np.asarray(W, dtype=np.complex128)
@@ -287,7 +312,7 @@ class GaugeOrthogonalLM:
             raise ValueError("W must have shape (d*D, D)")
         d = dD // D
         A = unstack_tensor(W, d, D)
-        r, _ = fast_right_fixed_point(A)
+        r, _ = self._right_fixed_point(A)
         rho = block_rdm(A, self.block_length, r)
         residual = rho - np.asarray(rho_target, dtype=np.complex128)
         residual_vector = real_vectorize_rho(residual)
@@ -361,7 +386,7 @@ class GaugeOrthogonalLM:
             candidate = polar_retraction(evaluation.W + alpha * direction)
             dD, D = candidate.shape
             A = unstack_tensor(candidate, dD // D, D)
-            r, _ = fast_right_fixed_point(A)
+            r, _ = self._right_fixed_point(A)
             residual = block_rdm(A, self.block_length, r) - rho_target
             residual_vector = real_vectorize_rho(residual)
             cost = 0.5 * float(np.dot(residual_vector, residual_vector))

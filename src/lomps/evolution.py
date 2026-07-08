@@ -39,6 +39,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--accept-cost", type=float, default=3e-16)
     parser.add_argument("--rank-tolerance", type=float, default=1e-12)
+    parser.add_argument(
+        "--fixed-point-solver",
+        choices=("dense", "fast"),
+        default="dense",
+        help=(
+            "Fixed-point solver used inside optimizer evaluations. "
+            "'dense' is reproducible and default; 'fast' uses ARPACK first."
+        ),
+    )
     parser.add_argument("--perturb-amplitudes", type=str, default="0.3,0.6,1,2,4,8")
     parser.add_argument("--perturbations-per-amplitude", type=int, default=2)
     parser.add_argument("--random-restarts", type=int, default=12)
@@ -84,12 +93,17 @@ def load_initial(path: Path) -> np.ndarray:
     return np.asarray(value, dtype=np.complex128)
 
 
-def options(accept_cost: float, rank_tolerance: float) -> tuple[LMOptions, LMOptions]:
+def options(
+    accept_cost: float,
+    rank_tolerance: float,
+    fixed_point_solver: str = "dense",
+) -> tuple[LMOptions, LMOptions]:
     primary = LMOptions(
         max_iterations=40_000,
         gradient_tolerance=1e-11,
         cost_tolerance=accept_cost,
         rank_tolerance=rank_tolerance,
+        fixed_point_solver=fixed_point_solver,
         plateau_window=50,
         plateau_relative_cost_drop=1e-4,
         plateau_absolute_cost_drop=1e-20,
@@ -213,12 +227,17 @@ def main() -> None:
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
         raise ValueError("invalid restart counts or amplitudes")
     initial = load_initial(args.initial_A)
-    primary, strict = options(args.accept_cost, args.rank_tolerance)
+    primary, strict = options(
+        args.accept_cost,
+        args.rank_tolerance,
+        args.fixed_point_solver,
+    )
     policy = {
         "protocol": asdict(protocol),
         "lightcone_sites": protocol.lightcone_sites,
         "target_margins": protocol.target_margins,
         "fixed_target": True,
+        "fixed_point_solver": args.fixed_point_solver,
         "accept_cost": args.accept_cost,
         "perturb_amplitudes": list(amplitudes),
         "perturbations_per_amplitude": args.perturbations_per_amplitude,
