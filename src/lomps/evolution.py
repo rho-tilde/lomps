@@ -25,6 +25,7 @@ from .embedding import (
     InitialLiftDiagnostics,
     coerce_initial_tensor,
     lift_left_canonical_seed,
+    product_circuit_left_canonical_seed,
 )
 from .optimizer import LMOptions, optimize_tensor
 from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
@@ -69,6 +70,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-seed", type=int, default=20260702)
     parser.add_argument("--embedding-noise-amplitude", type=float, default=1e-4)
     parser.add_argument("--embedding-seed", type=int, default=104_729)
+    parser.add_argument(
+        "--initial-seed-mode",
+        choices=("auto", "embedding", "circuit"),
+        default="auto",
+        help=(
+            "How to choose the optimizer seed for low-D starts. 'auto' uses "
+            "the product-circuit seed when possible and otherwise falls back "
+            "to the generic embedding seed."
+        ),
+    )
+    parser.add_argument(
+        "--circuit-lift-mixing-amplitude",
+        type=float,
+        default=1e-3,
+        help=(
+            "Stiefel mixing amplitude for product-circuit initial seeds; "
+            "positive values break the exact period-two transfer degeneracy."
+        ),
+    )
+    parser.add_argument(
+        "--circuit-lift-seed",
+        type=int,
+        default=2,
+        help="Random seed for product-circuit Stiefel mixing.",
+    )
     parser.add_argument(
         "--embedding-candidate-seeds",
         type=str,
@@ -214,12 +240,15 @@ def select_initial_seed(
     *,
     protocol: LocalEvolutionProtocol,
     primary: LMOptions,
+    initial_seed_mode: str,
     embedding_noise_amplitude: float,
     embedding_seed: int,
     embedding_candidate_seeds: tuple[int, ...],
     embedding_screen_max_iterations: int,
     embedding_screen_seconds: float,
     embedding_screen_fixed_point_solver: str,
+    circuit_lift_mixing_amplitude: float,
+    circuit_lift_seed: int,
     canonical_tolerance: float,
 ) -> tuple[np.ndarray, InitialLiftDiagnostics, list[dict[str, Any]]]:
     """Choose the initial high-D seed, optionally screening lift seeds.
@@ -230,10 +259,26 @@ def select_initial_seed(
     unchanged first-step target.
     """
 
-    if (
-        not embedding_candidate_seeds
-        or initial_source.shape[1] == trajectory_bond_dimension
-    ):
+    use_circuit = initial_seed_mode in ("auto", "circuit")
+    if use_circuit and initial_source.shape[1] < trajectory_bond_dimension:
+        try:
+            seed_tensor, diagnostics = product_circuit_left_canonical_seed(
+                initial_source,
+                trajectory_bond_dimension,
+                protocol,
+                mixing_amplitude=circuit_lift_mixing_amplitude,
+                seed=circuit_lift_seed,
+                canonical_tolerance=canonical_tolerance,
+            )
+            return seed_tensor, diagnostics, []
+        except ValueError:
+            if initial_seed_mode == "circuit":
+                raise
+
+    if initial_seed_mode == "circuit":
+        raise ValueError("circuit seed mode requires a lower-D product input")
+
+    if not embedding_candidate_seeds or initial_source.shape[1] == trajectory_bond_dimension:
         seed_tensor, diagnostics = lift_left_canonical_seed(
             initial_source,
             trajectory_bond_dimension,
@@ -409,8 +454,11 @@ def main() -> None:
         "trajectory_bond_dimension": trajectory_bond_dimension,
         "fixed_point_solver": args.fixed_point_solver,
         "accept_cost": args.accept_cost,
+        "initial_seed_mode": args.initial_seed_mode,
         "embedding_noise_amplitude": args.embedding_noise_amplitude,
         "embedding_seed": args.embedding_seed,
+        "circuit_lift_mixing_amplitude": args.circuit_lift_mixing_amplitude,
+        "circuit_lift_seed": args.circuit_lift_seed,
         "embedding_candidate_seeds": list(embedding_candidate_seeds),
         "embedding_screen_max_iterations": args.embedding_screen_max_iterations,
         "embedding_screen_seconds": args.embedding_screen_seconds,
@@ -454,12 +502,15 @@ def main() -> None:
             trajectory_bond_dimension,
             protocol=protocol,
             primary=primary,
+            initial_seed_mode=args.initial_seed_mode,
             embedding_noise_amplitude=args.embedding_noise_amplitude,
             embedding_seed=args.embedding_seed,
             embedding_candidate_seeds=embedding_candidate_seeds,
             embedding_screen_max_iterations=args.embedding_screen_max_iterations,
             embedding_screen_seconds=args.embedding_screen_seconds,
             embedding_screen_fixed_point_solver=args.embedding_screen_fixed_point_solver,
+            circuit_lift_mixing_amplitude=args.circuit_lift_mixing_amplitude,
+            circuit_lift_seed=args.circuit_lift_seed,
             canonical_tolerance=args.initial_canonical_tolerance,
         )
         states = np.lib.format.open_memmap(

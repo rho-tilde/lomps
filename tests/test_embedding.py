@@ -8,8 +8,10 @@ from lomps.canonical import canonical_errors, random_left_canonical
 from lomps.embedding import (
     coerce_initial_tensor,
     lift_left_canonical_seed,
+    product_circuit_left_canonical_seed,
     product_tensor,
 )
+from lomps.protocol import NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
 
 
@@ -79,6 +81,42 @@ class InitialEmbeddingTests(unittest.TestCase):
             diagnostic_block_length=2,
         )
         self.assertLess(np.linalg.norm(block_rdm(lifted, 2) - block_rdm(source, 2)), 1e-4)
+
+    def test_product_circuit_seed_matches_first_target_before_mixing(self) -> None:
+        source = product_tensor(np.array([1.0, 1.0j]))
+        seed, diagnostics = product_circuit_left_canonical_seed(
+            source,
+            12,
+            NONINTEGRABLE_ISING,
+            mixing_amplitude=0.0,
+            seed=2,
+        )
+        target = NONINTEGRABLE_ISING.target_rdm(source)
+        self.assertEqual(seed.shape, (2, 12, 12))
+        self.assertEqual(diagnostics.method, "product_circuit")
+        self.assertEqual(diagnostics.base_bond_dimension, 12)
+        self.assertLess(canonical_errors(seed)["left_canonical_error"], 1e-13)
+        self.assertLess(np.linalg.norm(block_rdm(seed, 4) - target), 2e-9)
+
+    def test_product_circuit_seed_mixing_breaks_period_two_degeneracy(self) -> None:
+        source = product_tensor(np.array([1.0, 1.0j]))
+        _, exact_diagnostics = product_circuit_left_canonical_seed(
+            source,
+            12,
+            NONINTEGRABLE_ISING,
+            mixing_amplitude=0.0,
+            seed=2,
+        )
+        mixed, mixed_diagnostics = product_circuit_left_canonical_seed(
+            source,
+            12,
+            NONINTEGRABLE_ISING,
+            mixing_amplitude=1e-3,
+            seed=2,
+        )
+        self.assertLess(abs(exact_diagnostics.seed_transfer_gap), 1e-10)
+        self.assertGreater(mixed_diagnostics.seed_transfer_gap, 1e-7)
+        self.assertLess(canonical_errors(mixed)["left_canonical_error"], 1e-13)
 
 
 if __name__ == "__main__":

@@ -77,13 +77,20 @@ constructs a deterministic lifted left-canonical seed at the requested
 trajectory bond dimension. This avoids treating a product state as if it were
 already a healthy injective high-D tensor.
 
-Product-state lifts can be numerically ill-conditioned because they start near
-a low-rank boundary of the high-D manifold. For these cases,
+For product starts, `--initial-seed-mode auto` constructs the seed from the
+exact one-step finite Strang circuit whenever the requested bond dimension
+matches the circuit seed dimension. In the qubit L=4 protocol this gives a
+D=12 seed: the two-site-periodic circuit MPS has alternating bond dimensions
+4 and 8, and LOMPS embeds the pair into one off-diagonal one-site tensor. A
+small deterministic Stiefel mixing, controlled by
+`--circuit-lift-mixing-amplitude`, breaks the exact period-two transfer
+degeneracy before the first optimizer polish.
+
+The generic embedding path remains available with
+`--initial-seed-mode embedding`. For these less structured low-D starts,
 `--embedding-candidate-seeds` accepts a comma-separated list of lift seeds,
 screens them against the exact first target with a bounded optimizer pass, and
-uses the seed with the lowest screening cost. The production trajectory still
-uses the requested `--fixed-point-solver`; the screening solver can be selected
-separately with `--embedding-screen-fixed-point-solver`.
+uses the seed with the lowest screening cost.
 
 For a dimension-count estimate of the smallest bond dimension needed to fit
 generic translation-invariant local data, use

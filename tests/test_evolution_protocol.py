@@ -90,12 +90,15 @@ class EvolutionProtocolTests(unittest.TestCase):
             3,
             protocol=NONINTEGRABLE_ISING,
             primary=primary,
+            initial_seed_mode="embedding",
             embedding_noise_amplitude=1e-4,
             embedding_seed=11,
             embedding_candidate_seeds=(1, 2, 3),
             embedding_screen_max_iterations=0,
             embedding_screen_seconds=0.0,
             embedding_screen_fixed_point_solver="same",
+            circuit_lift_mixing_amplitude=1e-3,
+            circuit_lift_seed=2,
             canonical_tolerance=1e-10,
         )
         np.testing.assert_array_equal(seed, source)
@@ -115,18 +118,48 @@ class EvolutionProtocolTests(unittest.TestCase):
                 2,
                 protocol=NONINTEGRABLE_ISING,
                 primary=primary,
+                initial_seed_mode="embedding",
                 embedding_noise_amplitude=1e-4,
                 embedding_seed=11,
                 embedding_candidate_seeds=(21, 22),
                 embedding_screen_max_iterations=0,
                 embedding_screen_seconds=0.0,
                 embedding_screen_fixed_point_solver="same",
+                circuit_lift_mixing_amplitude=1e-3,
+                circuit_lift_seed=2,
                 canonical_tolerance=1e-10,
             )
         self.assertEqual(seed.shape, (2, 2, 2))
         self.assertEqual(len(screen), 2)
         self.assertIn(diagnostics.seed, {21, 22})
         self.assertEqual(sum(row["selected"] for row in screen), 1)
+
+    def test_auto_initial_seed_uses_product_circuit_when_available(self) -> None:
+        source = product_tensor(np.array([1.0, 1.0j]))
+        primary, _ = options(
+            accept_cost=1e-8,
+            rank_tolerance=1e-12,
+            fixed_point_solver="dense",
+        )
+        seed, diagnostics, screen = select_initial_seed(
+            source,
+            12,
+            protocol=NONINTEGRABLE_ISING,
+            primary=primary,
+            initial_seed_mode="auto",
+            embedding_noise_amplitude=1e-4,
+            embedding_seed=11,
+            embedding_candidate_seeds=(),
+            embedding_screen_max_iterations=0,
+            embedding_screen_seconds=0.0,
+            embedding_screen_fixed_point_solver="same",
+            circuit_lift_mixing_amplitude=0.0,
+            circuit_lift_seed=2,
+            canonical_tolerance=1e-10,
+        )
+        self.assertEqual(seed.shape, (2, 12, 12))
+        self.assertEqual(screen, [])
+        self.assertEqual(diagnostics.method, "product_circuit")
 
 
 if __name__ == "__main__":

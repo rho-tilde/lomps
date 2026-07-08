@@ -9,6 +9,7 @@ from .dimensions import (
 from .embedding import (
     coerce_initial_tensor,
     lift_left_canonical_seed,
+    product_circuit_left_canonical_seed,
     product_tensor,
 )
 from .optimizer import (
@@ -32,6 +33,7 @@ __all__ = [
     "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "product_circuit_left_canonical_seed",
     "product_tensor",
     "quotient_tangent_dimension",
     "random_left_canonical",

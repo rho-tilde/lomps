@@ -6,19 +6,27 @@ a uniform left-canonical matrix-product state.
 If a run starts from a lower-bond tensor, including a product vector, LOMPS
 separates the physical source from the optimizer seed. The first target
 `target_L(A_source)` is built from the original low-D input. The optimizer is
-started from a deterministic left-canonical lift at the requested trajectory
+started from a deterministic left-canonical seed at the requested trajectory
 bond dimension. After the first accepted update, subsequent targets are built
 from the high-D trajectory tensor itself. This keeps product starts physically
 exact at the first update without forcing a product state to masquerade as an
 injective high-D tensor.
 
-When a product or other low-D start is lifted, some high-D seeds can be much
-better conditioned than others. If `--embedding-candidate-seeds` is provided,
-the runner constructs each candidate lift, fits it to the unchanged first
-target with a bounded screening optimizer, and selects the seed with the lowest
-screening cost. The selected seed and the full screen table are recorded in the
-metadata. This affects only the initial optimizer seed; it does not alter the
-first physical target.
+For product starts, the default `auto` seed mode uses the known circuit
+structure of the first step. LOMPS applies the finite even-half / odd-full /
+even-half Strang circuit to a product MPS, keeps the central two tensors of
+the resulting two-site-periodic MPS, and embeds them into one off-diagonal
+one-site tensor. In the qubit L=4 protocol the alternating bond dimensions are
+4 and 8, giving a D=12 left-canonical seed. A small deterministic Stiefel
+mixing breaks the exact period-two transfer degeneracy; the first fixed-target
+optimizer step then polishes the seed against the unchanged first target.
+
+The generic embedding path is still available for other low-D starts. If
+`--embedding-candidate-seeds` is provided, the runner constructs each candidate
+lift, fits it to the unchanged first target with a bounded screening optimizer,
+and selects the seed with the lowest screening cost. The selected seed and the
+full screen table are recorded in the metadata. This affects only the initial
+optimizer seed; it does not alter the first physical target.
 
 For a left-canonical tensor `A`, the non-integrable reference protocol builds
 a finite-lightcone density matrix, applies an even-half / odd-full / even-half
