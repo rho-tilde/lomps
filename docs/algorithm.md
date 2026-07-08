@@ -3,6 +3,15 @@
 LOMPS evolves a finite reduced density matrix while closing the dynamics with
 a uniform left-canonical matrix-product state.
 
+If a run starts from a lower-bond tensor, including a product vector, LOMPS
+separates the physical source from the optimizer seed. The first target
+`target_L(A_source)` is built from the original low-D input. The optimizer is
+started from a deterministic left-canonical lift at the requested trajectory
+bond dimension. After the first accepted update, subsequent targets are built
+from the high-D trajectory tensor itself. This keeps product starts physically
+exact at the first update without forcing a product state to masquerade as an
+injective high-D tensor.
+
 For a left-canonical tensor `A`, the non-integrable reference protocol builds
 a finite-lightcone density matrix, applies an even-half / odd-full / even-half
 Strang circuit, and traces buffer sites to recover the target local block. For

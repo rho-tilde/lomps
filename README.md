@@ -41,6 +41,7 @@ Run the checkpointed D=10 fixed-target restart benchmark:
 lomps-run \
   --initial-A data/nonintegrable_d10_t3p235.npy \
   --output-dir runs/d10 \
+  --bond-dimension 10 \
   --block-length 4 \
   --fixed-point-solver dense \
   --steps 100 \
@@ -66,6 +67,15 @@ C = 1/2 ||rho_L(A_fit) - rho_target||_F^2.
 
 During rescue, `rho_target` is computed once from the current physical state
 and remains fixed across all restart seeds.
+
+Initial states may be supplied either as a product vector with shape `(d,)`,
+an MPS tensor with shape `(d,D,D)`, or a singleton batch `(1,d,D,D)`. Tensor
+inputs must already be left-canonical. Use `--bond-dimension` to choose the
+trajectory bond dimension. If the input has smaller bond dimension, LOMPS uses
+the original low-D tensor to build the first physical target and separately
+constructs a deterministic lifted left-canonical seed at the requested
+trajectory bond dimension. This avoids treating a product state as if it were
+already a healthy injective high-D tensor.
 
 For a dimension-count estimate of the smallest bond dimension needed to fit
 generic translation-invariant local data, use

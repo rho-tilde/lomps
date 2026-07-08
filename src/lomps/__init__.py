@@ -6,6 +6,11 @@ from .dimensions import (
     quotient_tangent_dimension,
     translation_invariant_rdm_dimension,
 )
+from .embedding import (
+    coerce_initial_tensor,
+    lift_left_canonical_seed,
+    product_tensor,
+)
 from .optimizer import (
     LMOptions,
     LMResult,
@@ -22,9 +27,12 @@ __all__ = [
     "NONINTEGRABLE_ISING",
     "block_rdm",
     "canonical_errors",
+    "coerce_initial_tensor",
+    "lift_left_canonical_seed",
     "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "product_tensor",
     "quotient_tangent_dimension",
     "random_left_canonical",
     "translation_invariant_rdm_dimension",

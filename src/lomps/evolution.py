@@ -21,6 +21,7 @@ from .canonical import (
     stack_tensor,
     unstack_tensor,
 )
+from .embedding import coerce_initial_tensor, lift_left_canonical_seed
 from .optimizer import LMOptions, optimize_tensor
 from .protocol import NONINTEGRABLE_ISING
 
@@ -32,6 +33,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--base-time", type=float, required=True)
     parser.add_argument("--block-length", type=int, default=NONINTEGRABLE_ISING.block_length)
+    parser.add_argument(
+        "--bond-dimension",
+        type=int,
+        default=0,
+        help=(
+            "Trajectory bond dimension. Defaults to the input tensor bond "
+            "dimension; if larger, the input is used as the exact first-target "
+            "source and a deterministic lifted seed starts the optimizer."
+        ),
+    )
     parser.add_argument(
         "--odd-parity-warning-threshold",
         type=float,
@@ -52,6 +63,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perturbations-per-amplitude", type=int, default=2)
     parser.add_argument("--random-restarts", type=int, default=12)
     parser.add_argument("--random-seed", type=int, default=20260702)
+    parser.add_argument("--embedding-noise-amplitude", type=float, default=1e-4)
+    parser.add_argument("--embedding-seed", type=int, default=104_729)
+    parser.add_argument("--initial-canonical-tolerance", type=float, default=1e-10)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--run-time-limit", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
@@ -86,11 +100,7 @@ def append_csv(path: Path, row: dict[str, Any]) -> None:
 
 def load_initial(path: Path) -> np.ndarray:
     value = np.load(path, allow_pickle=False)
-    if value.ndim == 4 and len(value) == 1:
-        value = value[0]
-    if value.ndim != 3 or value.shape[0] != 2 or value.shape[1] != value.shape[2]:
-        raise ValueError("--initial-A must contain A with shape (2,D,D), optionally batched once")
-    return np.asarray(value, dtype=np.complex128)
+    return coerce_initial_tensor(value)
 
 
 def options(
@@ -226,7 +236,18 @@ def main() -> None:
     amplitudes = tuple(float(value) for value in args.perturb_amplitudes.split(","))
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
         raise ValueError("invalid restart counts or amplitudes")
-    initial = load_initial(args.initial_A)
+    initial_source = load_initial(args.initial_A)
+    trajectory_bond_dimension = (
+        initial_source.shape[1] if args.bond_dimension <= 0 else args.bond_dimension
+    )
+    initial_seed, initial_lift = lift_left_canonical_seed(
+        initial_source,
+        trajectory_bond_dimension,
+        noise_amplitude=args.embedding_noise_amplitude,
+        seed=args.embedding_seed,
+        diagnostic_block_length=protocol.block_length,
+        canonical_tolerance=args.initial_canonical_tolerance,
+    )
     primary, strict = options(
         args.accept_cost,
         args.rank_tolerance,
@@ -237,8 +258,12 @@ def main() -> None:
         "lightcone_sites": protocol.lightcone_sites,
         "target_margins": protocol.target_margins,
         "fixed_target": True,
+        "trajectory_bond_dimension": trajectory_bond_dimension,
         "fixed_point_solver": args.fixed_point_solver,
         "accept_cost": args.accept_cost,
+        "embedding_noise_amplitude": args.embedding_noise_amplitude,
+        "embedding_seed": args.embedding_seed,
+        "initial_canonical_tolerance": args.initial_canonical_tolerance,
         "perturb_amplitudes": list(amplitudes),
         "perturbations_per_amplitude": args.perturbations_per_amplitude,
         "random_restarts": args.random_restarts,
@@ -251,6 +276,8 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     states_path = output / "states.npy"
     times_path = output / "times.npy"
+    initial_source_path = output / "initial_source.npy"
+    initial_seed_path = output / "initial_seed.npy"
     steps_path = output / "steps.csv"
     restarts_path = output / "restart_trials.csv"
     metadata_path = output / "metadata.json"
@@ -262,6 +289,7 @@ def main() -> None:
             raise ValueError("run policy or requested length differs from checkpoint")
         completed = int(metadata["completed_steps"])
         states = np.lib.format.open_memmap(states_path, mode="r+")
+        initial_source = np.load(initial_source_path, allow_pickle=False)
         A = states[completed].copy()
         metadata["status"] = "running"
         metadata["resumed_at"] = utc_now()
@@ -273,20 +301,27 @@ def main() -> None:
             states_path,
             mode="w+",
             dtype=np.complex128,
-            shape=(args.steps + 1, *initial.shape),
+            shape=(args.steps + 1, *initial_seed.shape),
         )
-        states[0] = initial
+        states[0] = initial_seed
         states.flush()
+        atomic_npy(initial_source_path, initial_source)
+        atomic_npy(initial_seed_path, initial_seed)
         atomic_npy(
             times_path,
             args.base_time + protocol.delta_t * np.arange(args.steps + 1),
         )
         completed = 0
-        A = initial.copy()
+        A = initial_seed.copy()
         metadata = {
             "status": "running",
             "created_at": utc_now(),
             "initial_A": str(args.initial_A.resolve()),
+            "initial_source_store": initial_source_path.name,
+            "initial_seed_store": initial_seed_path.name,
+            "initial_source_shape": list(initial_source.shape),
+            "initial_seed_shape": list(initial_seed.shape),
+            "initial_lift": asdict(initial_lift),
             "steps": args.steps,
             "base_time": args.base_time,
             "delta_t": protocol.delta_t,
@@ -311,7 +346,9 @@ def main() -> None:
             started = time.perf_counter()
             # This target is computed exactly once.  Every rescue trial below
             # minimizes against this unchanged matrix.
-            target = protocol.target_rdm(A)
+            target_source = initial_source if step == 1 else A
+            target_source_kind = "initial_source" if step == 1 else "trajectory_state"
+            target = protocol.target_rdm(target_source)
             next_A, result, used_strict, fit_seconds = fit_fixed_target(
                 A, target, primary, strict
             )
@@ -340,6 +377,7 @@ def main() -> None:
                             "step": step,
                             "time": args.base_time + step * protocol.delta_t,
                             "target_frozen": True,
+                            "target_source": target_source_kind,
                             "trial": trial,
                             "seed_kind": kind,
                             "amplitude": amplitude,
@@ -394,6 +432,8 @@ def main() -> None:
                 {
                     "step": step,
                     "time": args.base_time + step * protocol.delta_t,
+                    "target_source": target_source_kind,
+                    "target_source_bond_dimension": target_source.shape[1],
                     "warm_start_cost": warm_cost,
                     "optimizer_cost": result.cost,
                     "target_residual": result.residual_norm,
