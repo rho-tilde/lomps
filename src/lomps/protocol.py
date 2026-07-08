@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
+import warnings
 
 import numpy as np
 
@@ -31,12 +32,24 @@ class LocalEvolutionProtocol:
     J: float
     trotter_order: int = 2
     symmetric_transverse: bool = False
+    odd_parity_warning_threshold: float = 1e-6
 
     @property
     def lightcone_sites(self) -> int:
-        if self.trotter_order != 2 or self.block_length % 2:
-            raise ValueError("LOMPS currently supports even-L second-order updates")
-        return self.block_length + 4
+        left_margin, right_margin = self.target_margins[0]
+        return self.block_length + left_margin + right_margin
+
+    @property
+    def target_margins(self) -> tuple[tuple[int, int], ...]:
+        """Return left/right buffer sizes used to reduce the evolved light cone."""
+
+        if self.trotter_order != 2:
+            raise ValueError("LOMPS currently supports second-order updates")
+        if self.block_length < 1:
+            raise ValueError("block_length must be positive")
+        if self.block_length % 2 == 0:
+            return ((2, 2),)
+        return ((2, 3), (3, 2))
 
     @cached_property
     def half_gate(self) -> Array:
@@ -68,21 +81,58 @@ class LocalEvolutionProtocol:
             sites=self.lightcone_sites,
         )
 
-    def target_rdm(self, A: Array) -> Array:
-        """Evolve the light cone and retain its central ``block_length`` sites."""
+    def target_rdm_candidates(self, A: Array) -> tuple[Array, ...]:
+        """Return one or two reductions of the evolved light cone.
+
+        Even block lengths use the symmetric ``2 | L | 2`` reduction. Odd block
+        lengths use the two parity-related reductions ``2 | L | 3`` and
+        ``3 | L | 2`` so that the Trotter circuit always acts on an even number
+        of light-cone sites.
+        """
 
         r, _ = right_fixed_point(A)
         rho_large = block_rdm(A, self.lightcone_sites, r)
         evolved = self.brickwall_unitary @ rho_large @ self.brickwall_unitary.conj().T
-        margin = (self.lightcone_sites - self.block_length) // 2
-        traced = tuple(range(margin)) + tuple(
-            range(self.lightcone_sites - margin, self.lightcone_sites)
-        )
-        return partial_trace_sites(
-            evolved,
-            sites=self.lightcone_sites,
-            traced_sites=traced,
-        )
+        candidates = []
+        for left_margin, right_margin in self.target_margins:
+            traced = tuple(range(left_margin)) + tuple(
+                range(self.lightcone_sites - right_margin, self.lightcone_sites)
+            )
+            candidates.append(
+                partial_trace_sites(
+                    evolved,
+                    sites=self.lightcone_sites,
+                    traced_sites=traced,
+                )
+            )
+        return tuple(candidates)
+
+    @staticmethod
+    def _trace_distance(rho_a: Array, rho_b: Array) -> float:
+        difference = 0.5 * ((rho_a - rho_b) + (rho_a - rho_b).conj().T)
+        return 0.5 * float(np.sum(np.abs(np.linalg.eigvalsh(difference))))
+
+    def target_rdm(self, A: Array) -> Array:
+        """Evolve the light cone and retain the protocol's ``block_length`` sites."""
+
+        candidates = self.target_rdm_candidates(A)
+        if len(candidates) == 1:
+            return candidates[0]
+
+        trace_distance = self._trace_distance(candidates[0], candidates[1])
+        hs_distance = float(np.linalg.norm(candidates[0] - candidates[1]))
+        if trace_distance > self.odd_parity_warning_threshold:
+            warnings.warn(
+                "Odd-L parity targets differ: "
+                f"trace_distance={trace_distance:.3e}, "
+                f"hs_distance={hs_distance:.3e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        averaged = sum(candidates) / len(candidates)
+        averaged = 0.5 * (averaged + averaged.conj().T)
+        return averaged / np.trace(averaged)
 
 
 NONINTEGRABLE_ISING = LocalEvolutionProtocol(

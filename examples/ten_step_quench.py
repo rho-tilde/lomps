@@ -18,7 +18,7 @@ options = LMOptions(
 
 for step in range(1, 11):
     target = NONINTEGRABLE_ISING.target_rdm(A)
-    A, result = optimize_tensor(A, target, 4, options)
+    A, result = optimize_tensor(A, target, NONINTEGRABLE_ISING.block_length, options)
     print(
         f"step={step:02d} time={0.001 * (step + 1):.3f} "
         f"cost={result.cost:.6e} residual={result.residual_norm:.6e}"

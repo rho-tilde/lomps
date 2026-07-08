@@ -31,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--base-time", type=float, required=True)
+    parser.add_argument("--block-length", type=int, default=NONINTEGRABLE_ISING.block_length)
+    parser.add_argument(
+        "--odd-parity-warning-threshold",
+        type=float,
+        default=NONINTEGRABLE_ISING.odd_parity_warning_threshold,
+    )
     parser.add_argument("--accept-cost", type=float, default=3e-16)
     parser.add_argument("--rank-tolerance", type=float, default=1e-12)
     parser.add_argument("--perturb-amplitudes", type=str, default="0.3,0.6,1,2,4,8")
@@ -100,6 +106,36 @@ def options(accept_cost: float, rank_tolerance: float) -> tuple[LMOptions, LMOpt
     return primary, strict
 
 
+def protocol_from_args(args: argparse.Namespace):
+    if args.block_length < 1:
+        raise ValueError("--block-length must be positive")
+    if args.odd_parity_warning_threshold < 0:
+        raise ValueError("--odd-parity-warning-threshold must be non-negative")
+    protocol = replace(
+        NONINTEGRABLE_ISING,
+        name=f"nonintegrable_ising_L{args.block_length}",
+        block_length=args.block_length,
+        odd_parity_warning_threshold=args.odd_parity_warning_threshold,
+    )
+    # Touch the derived property early so invalid protocols fail before any
+    # checkpoint files are created.
+    _ = protocol.lightcone_sites
+    return protocol
+
+
+def infer_block_length(seed: np.ndarray, target: np.ndarray) -> int:
+    local_dimension = int(seed.shape[0])
+    target_dimension = int(target.shape[0])
+    block_length = 0
+    dimension = 1
+    while dimension < target_dimension:
+        dimension *= local_dimension
+        block_length += 1
+    if dimension != target_dimension or target.shape[1] != target_dimension:
+        raise ValueError("target shape is incompatible with the physical dimension")
+    return block_length
+
+
 def fit_fixed_target(
     seed: np.ndarray,
     target: np.ndarray,
@@ -109,10 +145,11 @@ def fit_fixed_target(
     """Fit one seed to an unchanged target, retrying strictly if needed."""
 
     started = time.perf_counter()
-    best_A, best = optimize_tensor(seed, target, 4, primary)
+    block_length = infer_block_length(seed, target)
+    best_A, best = optimize_tensor(seed, target, block_length, primary)
     used_strict = False
     if best.cost > primary.cost_tolerance:
-        strict_A, strict_result = optimize_tensor(seed, target, 4, strict)
+        strict_A, strict_result = optimize_tensor(seed, target, block_length, strict)
         if strict_result.cost < best.cost:
             best_A, best = strict_A, strict_result
             used_strict = True
@@ -171,12 +208,16 @@ def main() -> None:
         raise ValueError("steps and checkpoint cadence must be positive")
     if args.accept_cost <= 0:
         raise ValueError("--accept-cost must be positive")
+    protocol = protocol_from_args(args)
     amplitudes = tuple(float(value) for value in args.perturb_amplitudes.split(","))
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
         raise ValueError("invalid restart counts or amplitudes")
     initial = load_initial(args.initial_A)
     primary, strict = options(args.accept_cost, args.rank_tolerance)
     policy = {
+        "protocol": asdict(protocol),
+        "lightcone_sites": protocol.lightcone_sites,
+        "target_margins": protocol.target_margins,
         "fixed_target": True,
         "accept_cost": args.accept_cost,
         "perturb_amplitudes": list(amplitudes),
@@ -219,7 +260,7 @@ def main() -> None:
         states.flush()
         atomic_npy(
             times_path,
-            args.base_time + NONINTEGRABLE_ISING.delta_t * np.arange(args.steps + 1),
+            args.base_time + protocol.delta_t * np.arange(args.steps + 1),
         )
         completed = 0
         A = initial.copy()
@@ -229,8 +270,8 @@ def main() -> None:
             "initial_A": str(args.initial_A.resolve()),
             "steps": args.steps,
             "base_time": args.base_time,
-            "delta_t": NONINTEGRABLE_ISING.delta_t,
-            "final_time": args.base_time + args.steps * NONINTEGRABLE_ISING.delta_t,
+            "delta_t": protocol.delta_t,
+            "final_time": args.base_time + args.steps * protocol.delta_t,
             "completed_steps": 0,
             "policy": policy,
         }
@@ -251,7 +292,7 @@ def main() -> None:
             started = time.perf_counter()
             # This target is computed exactly once.  Every rescue trial below
             # minimizes against this unchanged matrix.
-            target = NONINTEGRABLE_ISING.target_rdm(A)
+            target = protocol.target_rdm(A)
             next_A, result, used_strict, fit_seconds = fit_fixed_target(
                 A, target, primary, strict
             )
@@ -278,7 +319,7 @@ def main() -> None:
                         restarts_path,
                         {
                             "step": step,
-                            "time": args.base_time + step * NONINTEGRABLE_ISING.delta_t,
+                            "time": args.base_time + step * protocol.delta_t,
                             "target_frozen": True,
                             "trial": trial,
                             "seed_kind": kind,
@@ -317,7 +358,7 @@ def main() -> None:
                 status = "failed_fixed_target_multistart"
                 metadata["failure"] = {
                     "attempted_step": step,
-                    "time": args.base_time + step * NONINTEGRABLE_ISING.delta_t,
+                    "time": args.base_time + step * protocol.delta_t,
                     "warm_start_cost": warm_cost,
                     "best_cost": result.cost,
                     "best_target_residual": result.residual_norm,
@@ -333,7 +374,7 @@ def main() -> None:
                 steps_path,
                 {
                     "step": step,
-                    "time": args.base_time + step * NONINTEGRABLE_D12.delta_t,
+                    "time": args.base_time + step * protocol.delta_t,
                     "warm_start_cost": warm_cost,
                     "optimizer_cost": result.cost,
                     "target_residual": result.residual_norm,
@@ -363,7 +404,7 @@ def main() -> None:
                 atomic_json(metadata_path, metadata)
             if step <= 3 or step % 10 == 0 or restart_used:
                 print(
-                    f"step={step}/{args.steps} time={args.base_time + step * NONINTEGRABLE_ISING.delta_t:.3f} "
+                    f"step={step}/{args.steps} time={args.base_time + step * protocol.delta_t:.3f} "
                     f"cost={result.cost:.2e} restart={restart_used} trials={trials} "
                     f"wall={step_seconds:.2f}s",
                     flush=True,

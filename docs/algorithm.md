@@ -4,18 +4,29 @@ LOMPS evolves a finite reduced density matrix while closing the dynamics with
 a uniform left-canonical matrix-product state.
 
 For a left-canonical tensor `A`, the non-integrable reference protocol builds
-the eight-site density matrix, applies an even-half / odd-full / even-half
-Strang circuit, and traces the two outer sites on each side:
+a finite-lightcone density matrix, applies an even-half / odd-full / even-half
+Strang circuit, and traces buffer sites to recover the target local block. For
+even `L`, the light cone has `L + 4` sites and the reduction is symmetric:
 
 ```text
-target(A) = Tr_outer[U_Strang rho_8(A) U_Strang^dagger].
+target_L(A) = Tr_{2 left, 2 right}[U_Strang rho_{L+4}(A) U_Strang^dagger].
+```
+
+For odd `L`, LOMPS keeps the Strang circuit on an even number of sites by using
+an `L + 5` site light cone and averaging the two parity-related reductions:
+
+```text
+target_L(A) = 1/2 target_L^{2|3}(A) + 1/2 target_L^{3|2}(A).
 ```
 
 The next tensor minimizes
 
 ```text
-C(B) = 1/2 ||rho_4(B) - target(A)||_F^2.
+C(B) = 1/2 ||rho_L(B) - target_L(A)||_F^2.
 ```
+
+The runner warns if the two odd-`L` reductions have a trace distance larger
+than the configured parity warning threshold.
 
 The optimizer constructs the real Stiefel tangent of the left-canonical
 tensor, removes the true infinitesimal MPS gauge tangent, evaluates the

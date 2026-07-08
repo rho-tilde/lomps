@@ -56,6 +56,29 @@ class OptimizerTests(unittest.TestCase):
         current = block_rdm(A, protocol.block_length)
         np.testing.assert_allclose(target, current, atol=1e-12, rtol=0.0)
 
+    def test_zero_time_step_odd_target_is_current_rdm(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=76)
+        protocol = replace(NONINTEGRABLE_ISING, block_length=3, delta_t=0.0)
+        target = protocol.target_rdm(A)
+        current = block_rdm(A, protocol.block_length)
+        np.testing.assert_allclose(target, current, atol=1e-12, rtol=0.0)
+
+    def test_odd_protocol_averages_asymmetric_reductions(self) -> None:
+        A, _ = random_left_canonical(d=2, D=2, seed=77)
+        protocol = replace(
+            NONINTEGRABLE_ISING,
+            block_length=3,
+            odd_parity_warning_threshold=np.inf,
+        )
+        self.assertEqual(protocol.lightcone_sites, 8)
+        self.assertEqual(protocol.target_margins, ((2, 3), (3, 2)))
+        candidates = protocol.target_rdm_candidates(A)
+        self.assertEqual(len(candidates), 2)
+        expected = 0.5 * (candidates[0] + candidates[1])
+        expected = 0.5 * (expected + expected.conj().T)
+        expected = expected / np.trace(expected)
+        np.testing.assert_allclose(protocol.target_rdm(A), expected, atol=1e-12, rtol=0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,8 @@ The core implementation provides:
 - finite-block reduced density matrices and analytic directional derivatives;
 - the true MPS gauge tangent and its orthogonal complement;
 - gauge-orthogonal Levenberg--Marquardt updates with polar retraction;
-- the `L=4`, second-order non-integrable Ising quench protocol;
+- configurable second-order non-integrable Ising quench protocols, with
+  symmetric even-`L` and parity-averaged odd-`L` local windows;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
 
 ## Installation
@@ -38,6 +39,7 @@ Run the checkpointed D=10 fixed-target restart benchmark:
 lomps-run \
   --initial-A data/nonintegrable_d10_t3p235.npy \
   --output-dir runs/d10 \
+  --block-length 4 \
   --steps 100 \
   --base-time 3.235
 ```
