@@ -12,6 +12,14 @@ from the high-D trajectory tensor itself. This keeps product starts physically
 exact at the first update without forcing a product state to masquerade as an
 injective high-D tensor.
 
+When a product or other low-D start is lifted, some high-D seeds can be much
+better conditioned than others. If `--embedding-candidate-seeds` is provided,
+the runner constructs each candidate lift, fits it to the unchanged first
+target with a bounded screening optimizer, and selects the seed with the lowest
+screening cost. The selected seed and the full screen table are recorded in the
+metadata. This affects only the initial optimizer seed; it does not alter the
+first physical target.
+
 For a left-canonical tensor `A`, the non-integrable reference protocol builds
 a finite-lightcone density matrix, applies an even-half / odd-full / even-half
 Strang circuit, and traces buffer sites to recover the target local block. For

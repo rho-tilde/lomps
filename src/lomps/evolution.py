@@ -21,9 +21,13 @@ from .canonical import (
     stack_tensor,
     unstack_tensor,
 )
-from .embedding import coerce_initial_tensor, lift_left_canonical_seed
+from .embedding import (
+    InitialLiftDiagnostics,
+    coerce_initial_tensor,
+    lift_left_canonical_seed,
+)
 from .optimizer import LMOptions, optimize_tensor
-from .protocol import NONINTEGRABLE_ISING
+from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +69,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-seed", type=int, default=20260702)
     parser.add_argument("--embedding-noise-amplitude", type=float, default=1e-4)
     parser.add_argument("--embedding-seed", type=int, default=104_729)
+    parser.add_argument(
+        "--embedding-candidate-seeds",
+        type=str,
+        default="",
+        help=(
+            "Optional comma-separated lift seeds. When provided for a low-D "
+            "initial state, LOMPS screens these seeds against the exact first "
+            "target and starts from the seed with the lowest screening cost."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-screen-max-iterations",
+        type=int,
+        default=25,
+        help="Maximum LM iterations per initial-lift screening candidate.",
+    )
+    parser.add_argument(
+        "--embedding-screen-seconds",
+        type=float,
+        default=30.0,
+        help="Maximum wall seconds per initial-lift screening candidate.",
+    )
+    parser.add_argument(
+        "--embedding-screen-fixed-point-solver",
+        choices=("same", "dense", "fast"),
+        default="same",
+        help="Fixed-point solver used for initial-lift screening.",
+    )
     parser.add_argument("--initial-canonical-tolerance", type=float, default=1e-10)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--run-time-limit", type=float, default=0.0)
@@ -101,6 +133,22 @@ def append_csv(path: Path, row: dict[str, Any]) -> None:
 def load_initial(path: Path) -> np.ndarray:
     value = np.load(path, allow_pickle=False)
     return coerce_initial_tensor(value)
+
+
+def parse_seed_list(text: str) -> tuple[int, ...]:
+    """Return a de-duplicated integer seed tuple from comma-separated text."""
+
+    seeds: list[int] = []
+    seen: set[int] = set()
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        seed = int(item)
+        if seed not in seen:
+            seeds.append(seed)
+            seen.add(seed)
+    return tuple(seeds)
 
 
 def options(
@@ -158,6 +206,113 @@ def infer_block_length(seed: np.ndarray, target: np.ndarray) -> int:
     if dimension != target_dimension or target.shape[1] != target_dimension:
         raise ValueError("target shape is incompatible with the physical dimension")
     return block_length
+
+
+def select_initial_seed(
+    initial_source: np.ndarray,
+    trajectory_bond_dimension: int,
+    *,
+    protocol: LocalEvolutionProtocol,
+    primary: LMOptions,
+    embedding_noise_amplitude: float,
+    embedding_seed: int,
+    embedding_candidate_seeds: tuple[int, ...],
+    embedding_screen_max_iterations: int,
+    embedding_screen_seconds: float,
+    embedding_screen_fixed_point_solver: str,
+    canonical_tolerance: float,
+) -> tuple[np.ndarray, InitialLiftDiagnostics, list[dict[str, Any]]]:
+    """Choose the initial high-D seed, optionally screening lift seeds.
+
+    Screening is only meaningful when a lower-bond source is lifted into a
+    larger optimizer manifold. The exact first target is still computed from
+    ``initial_source``; candidate seeds are ranked by a bounded fit to that
+    unchanged first-step target.
+    """
+
+    if (
+        not embedding_candidate_seeds
+        or initial_source.shape[1] == trajectory_bond_dimension
+    ):
+        seed_tensor, diagnostics = lift_left_canonical_seed(
+            initial_source,
+            trajectory_bond_dimension,
+            noise_amplitude=embedding_noise_amplitude,
+            seed=embedding_seed,
+            diagnostic_block_length=protocol.block_length,
+            canonical_tolerance=canonical_tolerance,
+        )
+        return seed_tensor, diagnostics, []
+
+    if embedding_screen_max_iterations < 0:
+        raise ValueError("--embedding-screen-max-iterations must be non-negative")
+    if embedding_screen_seconds < 0:
+        raise ValueError("--embedding-screen-seconds must be non-negative")
+
+    screen_solver = (
+        primary.fixed_point_solver
+        if embedding_screen_fixed_point_solver == "same"
+        else embedding_screen_fixed_point_solver
+    )
+    screen_options = replace(
+        primary,
+        max_iterations=embedding_screen_max_iterations,
+        maximum_seconds=embedding_screen_seconds,
+        cost_tolerance=0.0,
+        fixed_point_solver=screen_solver,
+        verbose=False,
+    )
+    target = protocol.target_rdm(initial_source)
+    best: tuple[float, np.ndarray, InitialLiftDiagnostics] | None = None
+    rows: list[dict[str, Any]] = []
+    for index, candidate_seed in enumerate(embedding_candidate_seeds):
+        seed_tensor, diagnostics = lift_left_canonical_seed(
+            initial_source,
+            trajectory_bond_dimension,
+            noise_amplitude=embedding_noise_amplitude,
+            seed=candidate_seed,
+            diagnostic_block_length=protocol.block_length,
+            canonical_tolerance=canonical_tolerance,
+        )
+        started = time.perf_counter()
+        _, result = optimize_tensor(
+            seed_tensor,
+            target,
+            protocol.block_length,
+            screen_options,
+        )
+        seconds = time.perf_counter() - started
+        row = {
+            "candidate_index": index,
+            "seed": int(candidate_seed),
+            "noise_amplitude": float(diagnostics.noise_amplitude),
+            "cost": float(result.cost),
+            "target_residual": float(result.residual_norm),
+            "status": result.status,
+            "evaluations": len(result.history),
+            "seconds": seconds,
+            "seed_transfer_gap": float(diagnostics.seed_transfer_gap),
+            "seed_right_fixed_point_minimum_eigenvalue": float(
+                diagnostics.seed_right_fixed_point_minimum_eigenvalue
+            ),
+            "selected": False,
+        }
+        rows.append(row)
+        print(
+            f"embedding-screen seed={candidate_seed} cost={result.cost:.2e} "
+            f"status={result.status} evals={len(result.history)}",
+            flush=True,
+        )
+        if best is None or result.cost < best[0]:
+            best = (float(result.cost), seed_tensor, diagnostics)
+
+    if best is None:
+        raise ValueError("--embedding-candidate-seeds did not contain any seeds")
+    selected_seed = int(best[2].seed)
+    for row in rows:
+        row["selected"] = row["seed"] == selected_seed
+    print(f"embedding-screen selected_seed={selected_seed}", flush=True)
+    return best[1], best[2], rows
 
 
 def fit_fixed_target(
@@ -240,19 +395,12 @@ def main() -> None:
     trajectory_bond_dimension = (
         initial_source.shape[1] if args.bond_dimension <= 0 else args.bond_dimension
     )
-    initial_seed, initial_lift = lift_left_canonical_seed(
-        initial_source,
-        trajectory_bond_dimension,
-        noise_amplitude=args.embedding_noise_amplitude,
-        seed=args.embedding_seed,
-        diagnostic_block_length=protocol.block_length,
-        canonical_tolerance=args.initial_canonical_tolerance,
-    )
     primary, strict = options(
         args.accept_cost,
         args.rank_tolerance,
         args.fixed_point_solver,
     )
+    embedding_candidate_seeds = parse_seed_list(args.embedding_candidate_seeds)
     policy = {
         "protocol": asdict(protocol),
         "lightcone_sites": protocol.lightcone_sites,
@@ -263,6 +411,10 @@ def main() -> None:
         "accept_cost": args.accept_cost,
         "embedding_noise_amplitude": args.embedding_noise_amplitude,
         "embedding_seed": args.embedding_seed,
+        "embedding_candidate_seeds": list(embedding_candidate_seeds),
+        "embedding_screen_max_iterations": args.embedding_screen_max_iterations,
+        "embedding_screen_seconds": args.embedding_screen_seconds,
+        "embedding_screen_fixed_point_solver": args.embedding_screen_fixed_point_solver,
         "initial_canonical_tolerance": args.initial_canonical_tolerance,
         "perturb_amplitudes": list(amplitudes),
         "perturbations_per_amplitude": args.perturbations_per_amplitude,
@@ -297,6 +449,19 @@ def main() -> None:
     else:
         if states_path.exists() or metadata_path.exists():
             raise FileExistsError("output exists; use --resume or a new output directory")
+        initial_seed, initial_lift, lift_screen = select_initial_seed(
+            initial_source,
+            trajectory_bond_dimension,
+            protocol=protocol,
+            primary=primary,
+            embedding_noise_amplitude=args.embedding_noise_amplitude,
+            embedding_seed=args.embedding_seed,
+            embedding_candidate_seeds=embedding_candidate_seeds,
+            embedding_screen_max_iterations=args.embedding_screen_max_iterations,
+            embedding_screen_seconds=args.embedding_screen_seconds,
+            embedding_screen_fixed_point_solver=args.embedding_screen_fixed_point_solver,
+            canonical_tolerance=args.initial_canonical_tolerance,
+        )
         states = np.lib.format.open_memmap(
             states_path,
             mode="w+",
@@ -322,6 +487,7 @@ def main() -> None:
             "initial_source_shape": list(initial_source.shape),
             "initial_seed_shape": list(initial_seed.shape),
             "initial_lift": asdict(initial_lift),
+            "initial_lift_screen": lift_screen,
             "steps": args.steps,
             "base_time": args.base_time,
             "delta_t": protocol.delta_t,

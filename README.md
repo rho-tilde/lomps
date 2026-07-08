@@ -77,6 +77,14 @@ constructs a deterministic lifted left-canonical seed at the requested
 trajectory bond dimension. This avoids treating a product state as if it were
 already a healthy injective high-D tensor.
 
+Product-state lifts can be numerically ill-conditioned because they start near
+a low-rank boundary of the high-D manifold. For these cases,
+`--embedding-candidate-seeds` accepts a comma-separated list of lift seeds,
+screens them against the exact first target with a bounded optimizer pass, and
+uses the seed with the lowest screening cost. The production trajectory still
+uses the requested `--fixed-point-solver`; the screening solver can be selected
+separately with `--embedding-screen-fixed-point-solver`.
+
 For a dimension-count estimate of the smallest bond dimension needed to fit
 generic translation-invariant local data, use
 `minimum_bond_dimension_for_ti_rdm(d, L)`. It compares the quotient tangent
