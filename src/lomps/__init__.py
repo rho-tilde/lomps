@@ -20,6 +20,14 @@ from .optimizer import (
     optimizer_right_fixed_point,
     optimize_tensor,
 )
+from .observables import (
+    PAULI_X,
+    PAULI_Y,
+    PAULI_Z,
+    local_expectations,
+    one_site_rdm,
+    trajectory_expectations,
+)
 from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
 from .rdm import block_rdm
 
@@ -36,6 +44,12 @@ __all__ = [
     "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "local_expectations",
+    "one_site_rdm",
+    "trajectory_expectations",
+    "PAULI_X",
+    "PAULI_Y",
+    "PAULI_Z",
     "FixedTargetGrassmannCG",
     "optimize_fixed_target_cg",
     "product_circuit_left_canonical_seed",
