@@ -25,6 +25,7 @@ from lomps.transfer import right_fixed_point
 class OptimizerTests(unittest.TestCase):
     def test_dense_fixed_point_solver_is_default(self) -> None:
         self.assertEqual(LMOptions().fixed_point_solver, "dense")
+        self.assertEqual(LMOptions().linear_solver, "svd")
 
     def test_lm_recovers_nearby_reachable_rdm(self) -> None:
         A0, W0 = random_left_canonical(d=2, D=2, seed=72)
@@ -80,6 +81,55 @@ class OptimizerTests(unittest.TestCase):
                     verbose=False,
                 ),
             )
+
+    def test_optimizer_rejects_unknown_linear_solver(self) -> None:
+        with self.assertRaises(ValueError):
+            GaugeOrthogonalLM(
+                2,
+                LMOptions(
+                    linear_solver="unknown",  # type: ignore[arg-type]
+                    verbose=False,
+                ),
+            )
+
+    def test_normal_linear_solver_matches_svd_direction(self) -> None:
+        _, W = random_left_canonical(d=2, D=2, seed=507)
+        target_A, _ = random_left_canonical(d=2, D=2, seed=508)
+        target = block_rdm(target_A, 3)
+        svd_solver = GaugeOrthogonalLM(
+            3,
+            LMOptions(
+                rank_tolerance=1e-10,
+                trust_radius=1e6,
+                fixed_point_solver="dense",
+                verbose=False,
+            ),
+        )
+        normal_solver = GaugeOrthogonalLM(
+            3,
+            LMOptions(
+                rank_tolerance=1e-10,
+                trust_radius=1e6,
+                fixed_point_solver="dense",
+                linear_solver="normal",
+                verbose=False,
+            ),
+        )
+        damping = 1e-4
+        svd_direction = svd_solver._lm_direction(
+            svd_solver.evaluate(W, target),
+            damping,
+        )[0]
+        normal_direction = normal_solver._lm_direction(
+            normal_solver.evaluate(W, target),
+            damping,
+        )[0]
+        np.testing.assert_allclose(
+            normal_direction,
+            svd_direction,
+            atol=1e-10,
+            rtol=1e-9,
+        )
 
     def test_fixed_point_solver_policy_selects_dense_and_fast(self) -> None:
         A, _ = random_left_canonical(d=2, D=2, seed=78)

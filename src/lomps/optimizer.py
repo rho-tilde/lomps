@@ -34,6 +34,7 @@ from .transfer import (
 
 Array = np.ndarray
 FixedPointSolver = Literal["dense", "fast"]
+LMLinearSolver = Literal["svd", "normal"]
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class LMOptions:
     plateau_absolute_cost_drop: float = 1e-20
     maximum_seconds: float = 600.0
     fixed_point_solver: FixedPointSolver = "dense"
+    linear_solver: LMLinearSolver = "svd"
     verbose: bool = True
 
 
@@ -69,9 +71,9 @@ class LMEvaluation:
     basis: Array
     jacobian: Array
     gradient: Array
-    svd_u: Array
+    svd_u: Array | None
     singular_values: Array
-    svd_vh: Array
+    svd_vh: Array | None
     visible_rank: int
     rank_tolerance: float
 
@@ -327,9 +329,39 @@ class GaugeOrthogonalLM:
         self.options = options or LMOptions()
         if self.options.fixed_point_solver not in ("dense", "fast"):
             raise ValueError("fixed_point_solver must be 'dense' or 'fast'")
+        if self.options.linear_solver not in ("svd", "normal"):
+            raise ValueError("linear_solver must be 'svd' or 'normal'")
+        self._cached_W: Array | None = None
+        self._cached_r: Array | None = None
+        self._cached_info: dict[str, float | complex] | None = None
 
     def _right_fixed_point(self, A: Array) -> tuple[Array, dict[str, float | complex]]:
         return optimizer_right_fixed_point(A, self.options.fixed_point_solver)
+
+    def _right_fixed_point_for_W(
+        self,
+        W: Array,
+        A: Array,
+    ) -> tuple[Array, dict[str, float | complex]]:
+        if (
+            self._cached_W is not None
+            and self._cached_r is not None
+            and self._cached_info is not None
+            and self._cached_W.shape == W.shape
+            and np.array_equal(self._cached_W, W)
+        ):
+            return self._cached_r, self._cached_info
+        return self._right_fixed_point(A)
+
+    def _cache_fixed_point(
+        self,
+        W: Array,
+        r: Array,
+        info: dict[str, float | complex],
+    ) -> None:
+        self._cached_W = np.asarray(W, dtype=np.complex128).copy()
+        self._cached_r = np.asarray(r, dtype=np.complex128).copy()
+        self._cached_info = dict(info)
 
     def evaluate(self, W: Array, rho_target: Array) -> LMEvaluation:
         W = np.asarray(W, dtype=np.complex128)
@@ -338,7 +370,7 @@ class GaugeOrthogonalLM:
             raise ValueError("W must have shape (d*D, D)")
         d = dD // D
         A = unstack_tensor(W, d, D)
-        r, _ = self._right_fixed_point(A)
+        r, _ = self._right_fixed_point_for_W(W, A)
         rho = block_rdm(A, self.block_length, r)
         residual = rho - np.asarray(rho_target, dtype=np.complex128)
         residual_vector = real_vectorize_rho(residual)
@@ -351,20 +383,27 @@ class GaugeOrthogonalLM:
             A, tangent_tensors, self.block_length, r
         )
         gradient = jacobian.T @ residual_vector
-        svd_u, singular_values, svd_vh = _safe_svd(
-            jacobian, full_matrices=False
-        )
-        if singular_values.size:
-            effective_tolerance = max(
-                self.options.rank_tolerance,
-                max(jacobian.shape) * np.finfo(float).eps * singular_values[0],
+        if self.options.linear_solver == "svd":
+            svd_u, singular_values, svd_vh = _safe_svd(
+                jacobian, full_matrices=False
             )
-            visible_rank = int(
-                np.count_nonzero(singular_values > effective_tolerance)
-            )
+            if singular_values.size:
+                effective_tolerance = max(
+                    self.options.rank_tolerance,
+                    max(jacobian.shape) * np.finfo(float).eps * singular_values[0],
+                )
+                visible_rank = int(
+                    np.count_nonzero(singular_values > effective_tolerance)
+                )
+            else:
+                effective_tolerance = self.options.rank_tolerance
+                visible_rank = 0
         else:
+            svd_u = None
+            singular_values = np.array([], dtype=float)
+            svd_vh = None
             effective_tolerance = self.options.rank_tolerance
-            visible_rank = 0
+            visible_rank = -1
         return LMEvaluation(
             W=W,
             A=A,
@@ -382,9 +421,11 @@ class GaugeOrthogonalLM:
             rank_tolerance=effective_tolerance,
         )
 
-    def _lm_direction(
+    def _svd_lm_direction(
         self, evaluation: LMEvaluation, damping: float
     ) -> tuple[Array, float, float, float]:
+        if evaluation.svd_u is None or evaluation.svd_vh is None:
+            raise RuntimeError("SVD-LM direction requires SVD evaluation data")
         coefficients = -evaluation.svd_vh.T @ (
             (
                 evaluation.singular_values
@@ -392,6 +433,33 @@ class GaugeOrthogonalLM:
             )
             * (evaluation.svd_u.T @ evaluation.residual_vector)
         )
+        return self._direction_from_coefficients(evaluation, coefficients)
+
+    def _normal_lm_direction(
+        self,
+        evaluation: LMEvaluation,
+        damping: float,
+    ) -> tuple[Array, float, float, float]:
+        gram = evaluation.jacobian.T @ evaluation.jacobian
+        system = gram + float(damping) * np.eye(gram.shape[0])
+        rhs = -evaluation.gradient
+        try:
+            cho = la.cho_factor(system, lower=True, check_finite=False)
+            coefficients = la.cho_solve(cho, rhs, check_finite=False)
+        except la.LinAlgError:
+            coefficients = la.solve(
+                system,
+                rhs,
+                assume_a="sym",
+                check_finite=False,
+            )
+        return self._direction_from_coefficients(evaluation, coefficients)
+
+    def _direction_from_coefficients(
+        self,
+        evaluation: LMEvaluation,
+        coefficients: Array,
+    ) -> tuple[Array, float, float, float]:
         raw_norm = float(la.norm(coefficients))
         if self.options.trust_radius > 0 and raw_norm > self.options.trust_radius:
             coefficients *= self.options.trust_radius / raw_norm
@@ -399,6 +467,13 @@ class GaugeOrthogonalLM:
         step_norm = float(la.norm(direction))
         slope = float(np.dot(evaluation.gradient, coefficients))
         return direction, slope, step_norm, raw_norm
+
+    def _lm_direction(
+        self, evaluation: LMEvaluation, damping: float
+    ) -> tuple[Array, float, float, float]:
+        if self.options.linear_solver == "normal":
+            return self._normal_lm_direction(evaluation, damping)
+        return self._svd_lm_direction(evaluation, damping)
 
     def _line_search(
         self,
@@ -412,20 +487,32 @@ class GaugeOrthogonalLM:
             candidate = polar_retraction(evaluation.W + alpha * direction)
             dD, D = candidate.shape
             A = unstack_tensor(candidate, dD // D, D)
-            r, _ = self._right_fixed_point(A)
+            r, info = self._right_fixed_point(A)
             residual = block_rdm(A, self.block_length, r) - rho_target
             residual_vector = real_vectorize_rho(residual)
             cost = 0.5 * float(np.dot(residual_vector, residual_vector))
             if np.isfinite(cost) and cost <= (
                 evaluation.cost + self.options.armijo_c1 * alpha * slope
             ):
+                self._cache_fixed_point(candidate, r, info)
                 return True, alpha, candidate, cost
             alpha *= 0.5
         return False, 0.0, evaluation.W, evaluation.cost
 
-    def optimize(self, W0: Array, rho_target: Array) -> LMResult:
+    def optimize(
+        self,
+        W0: Array,
+        rho_target: Array,
+        initial_fixed_point: Array | None = None,
+    ) -> LMResult:
         W = np.asarray(W0, dtype=np.complex128).copy()
         rho_target = np.asarray(rho_target, dtype=np.complex128)
+        if initial_fixed_point is not None:
+            self._cache_fixed_point(
+                W,
+                np.asarray(initial_fixed_point, dtype=np.complex128),
+                {"provided_hint": 1.0},
+            )
         damping = float(self.options.initial_damping)
         history: list[LMRecord] = []
         best_W = W.copy()
@@ -585,10 +672,15 @@ def optimize_tensor(
     rho_target: Array,
     block_length: int,
     options: LMOptions | None = None,
+    initial_fixed_point: Array | None = None,
 ) -> tuple[Array, LMResult]:
     """Convenience wrapper returning the optimized physical-first tensor."""
 
     W0 = stack_tensor(A0)
-    result = GaugeOrthogonalLM(block_length, options).optimize(W0, rho_target)
+    result = GaugeOrthogonalLM(block_length, options).optimize(
+        W0,
+        rho_target,
+        initial_fixed_point=initial_fixed_point,
+    )
     d, D, _ = A0.shape
     return unstack_tensor(result.W, d, D), result

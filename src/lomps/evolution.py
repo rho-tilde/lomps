@@ -93,6 +93,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--accept-cost", type=float, default=3e-16)
+    parser.add_argument(
+        "--first-step-accept-cost",
+        type=float,
+        default=None,
+        help=(
+            "Optional acceptance threshold only for the first low-D source to "
+            "trajectory-D fit. Later trajectory steps still use --accept-cost."
+        ),
+    )
     parser.add_argument("--rank-tolerance", type=float, default=1e-12)
     parser.add_argument(
         "--fixed-point-solver",
@@ -103,10 +112,30 @@ def parse_args() -> argparse.Namespace:
             "'dense' is reproducible and default; 'fast' uses ARPACK first."
         ),
     )
+    parser.add_argument(
+        "--lm-linear-solver",
+        choices=("normal", "svd"),
+        default="normal",
+        help=(
+            "Linear solver inside LM optimizer evaluations. 'normal' builds "
+            "the dense Jacobian but solves damped normal equations by Cholesky; "
+            "'svd' keeps the older SVD-LM step and rank diagnostics."
+        ),
+    )
     parser.add_argument("--perturb-amplitudes", type=str, default="0.3,0.6,1,2,4,8")
     parser.add_argument("--perturbations-per-amplitude", type=int, default=2)
     parser.add_argument("--random-restarts", type=int, default=12)
     parser.add_argument("--random-seed", type=int, default=20260702)
+    parser.add_argument(
+        "--strict-retry",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Retry each failed LM seed with stricter stopping controls. "
+            "Use --no-strict-retry for independent restart batches where each "
+            "seed receives only one primary LM solve."
+        ),
+    )
     parser.add_argument(
         "--embedding-noise-amplitude",
         type=float,
@@ -297,10 +326,20 @@ def effective_initial_seed_lift_noise(
     return float(embedding_noise_amplitude)
 
 
+def effective_first_step_accept_cost(
+    requested: float | None,
+    default_accept_cost: float,
+) -> float:
+    """Return the first-step acceptance threshold after applying defaults."""
+
+    return float(default_accept_cost if requested is None else requested)
+
+
 def options(
     accept_cost: float,
     rank_tolerance: float,
     fixed_point_solver: str = "dense",
+    linear_solver: str = "normal",
 ) -> tuple[LMOptions, LMOptions]:
     primary = LMOptions(
         max_iterations=40_000,
@@ -308,6 +347,7 @@ def options(
         cost_tolerance=accept_cost,
         rank_tolerance=rank_tolerance,
         fixed_point_solver=fixed_point_solver,
+        linear_solver=linear_solver,
         plateau_window=50,
         plateau_relative_cost_drop=1e-4,
         plateau_absolute_cost_drop=1e-20,
@@ -540,15 +580,30 @@ def fit_fixed_target(
     target: np.ndarray,
     primary: LMOptions,
     strict: LMOptions,
+    seed_fixed_point: np.ndarray | None = None,
+    *,
+    use_strict_retry: bool = True,
 ) -> tuple[np.ndarray, object, bool, float]:
     """Fit one seed to an unchanged target, retrying strictly if needed."""
 
     started = time.perf_counter()
     block_length = infer_block_length(seed, target)
-    best_A, best = optimize_tensor(seed, target, block_length, primary)
+    best_A, best = optimize_tensor(
+        seed,
+        target,
+        block_length,
+        primary,
+        initial_fixed_point=seed_fixed_point,
+    )
     used_strict = False
-    if best.cost > primary.cost_tolerance:
-        strict_A, strict_result = optimize_tensor(seed, target, block_length, strict)
+    if use_strict_retry and best.cost > primary.cost_tolerance:
+        strict_A, strict_result = optimize_tensor(
+            seed,
+            target,
+            block_length,
+            strict,
+            initial_fixed_point=seed_fixed_point,
+        )
         if strict_result.cost < best.cost:
             best_A, best = strict_A, strict_result
             used_strict = True
@@ -620,6 +675,12 @@ def main() -> None:
         raise ValueError("steps and checkpoint cadence must be positive")
     if args.accept_cost <= 0:
         raise ValueError("--accept-cost must be positive")
+    first_step_accept_cost = effective_first_step_accept_cost(
+        args.first_step_accept_cost,
+        args.accept_cost,
+    )
+    if first_step_accept_cost <= 0:
+        raise ValueError("--first-step-accept-cost must be positive")
     if args.first_step_cg_max_iterations < 0 or args.first_step_cg_restart < 1:
         raise ValueError("invalid first-step CG iteration controls")
     if args.first_step_cg_seconds < 0:
@@ -655,10 +716,17 @@ def main() -> None:
         args.accept_cost,
         args.rank_tolerance,
         args.fixed_point_solver,
+        args.lm_linear_solver,
+    )
+    first_primary, first_strict = options(
+        first_step_accept_cost,
+        args.rank_tolerance,
+        args.fixed_point_solver,
+        args.lm_linear_solver,
     )
     first_step_cg = first_step_cg_options(
         args,
-        accept_cost=args.accept_cost,
+        accept_cost=first_step_accept_cost,
         rank_tolerance=args.rank_tolerance,
         default_fixed_point_solver=args.fixed_point_solver,
     )
@@ -666,7 +734,7 @@ def main() -> None:
     policy = {
         "protocol": asdict(protocol),
         "lightcone_sites": protocol.lightcone_sites,
-        "target_margins": protocol.target_margins,
+        "target_margins": [list(margin) for margin in protocol.target_margins],
         "fixed_target": True,
         "trajectory_bond_dimension": trajectory_bond_dimension,
         "initial_seed_A": (
@@ -674,7 +742,9 @@ def main() -> None:
         ),
         "initial_seed_lift_noise_amplitude": initial_seed_lift_noise_amplitude,
         "fixed_point_solver": args.fixed_point_solver,
+        "lm_linear_solver": args.lm_linear_solver,
         "accept_cost": args.accept_cost,
+        "first_step_accept_cost": first_step_accept_cost,
         "initial_seed_mode": args.initial_seed_mode,
         "embedding_noise_amplitude": args.embedding_noise_amplitude,
         "embedding_seed": args.embedding_seed,
@@ -691,6 +761,7 @@ def main() -> None:
         "perturbations_per_amplitude": args.perturbations_per_amplitude,
         "random_restarts": args.random_restarts,
         "random_seed": args.random_seed,
+        "strict_retry": args.strict_retry,
         "primary_optimizer": asdict(primary),
         "strict_optimizer": asdict(strict),
     }
@@ -871,6 +942,14 @@ def main() -> None:
                 and step == 1
                 and initial_source.shape[1] < trajectory_bond_dimension
             )
+            use_first_step_threshold = (
+                step == 1 and initial_source.shape[1] < trajectory_bond_dimension
+            )
+            active_accept_cost = (
+                first_step_accept_cost if use_first_step_threshold else args.accept_cost
+            )
+            active_primary = first_primary if use_first_step_threshold else primary
+            active_strict = first_strict if use_first_step_threshold else strict
             first_step_cg_result = None
             first_step_cg_seconds = 0.0
             if use_first_step_cg:
@@ -883,7 +962,11 @@ def main() -> None:
                     A, target, first_step_cg
                 )
                 next_A, result, used_strict, polish_seconds = fit_fixed_target(
-                    cg_A, target, primary, strict
+                    cg_A,
+                    target,
+                    active_primary,
+                    active_strict,
+                    use_strict_retry=args.strict_retry,
                 )
                 fit_seconds = first_step_cg_seconds + polish_seconds
                 warm_cost = float(first_step_cg_result.cost)
@@ -895,7 +978,15 @@ def main() -> None:
                 )
             else:
                 next_A, result, used_strict, fit_seconds = fit_fixed_target(
-                    A, target, primary, strict
+                    A,
+                    target,
+                    active_primary,
+                    active_strict,
+                    seed_fixed_point=np.asarray(
+                        right_fixed_points[completed],
+                        dtype=np.complex128,
+                    ),
+                    use_strict_retry=args.strict_retry,
                 )
                 warm_cost = float(result.cost)
             restart_used = False
@@ -903,7 +994,7 @@ def main() -> None:
             accepted_trial = -1
             trials = 0
 
-            if result.cost > args.accept_cost:
+            if result.cost > active_accept_cost:
                 for kind, amplitude, trial, seed, seed_distance in distant_seeds(
                     A,
                     step=step,
@@ -913,7 +1004,11 @@ def main() -> None:
                     random_seed=args.random_seed,
                 ):
                     candidate_A, candidate_result, candidate_strict, seconds = fit_fixed_target(
-                        seed, target, primary, strict
+                        seed,
+                        target,
+                        active_primary,
+                        active_strict,
+                        use_strict_retry=args.strict_retry,
                     )
                     trials += 1
                     append_csv(
@@ -936,7 +1031,8 @@ def main() -> None:
                             "evaluations": len(candidate_result.history),
                             "used_strict_retry": candidate_strict,
                             "seconds": seconds,
-                            "accepted": candidate_result.cost <= args.accept_cost,
+                            "accept_cost": active_accept_cost,
+                            "accepted": candidate_result.cost <= active_accept_cost,
                         },
                     )
                     print(
@@ -945,7 +1041,7 @@ def main() -> None:
                         f"cost={candidate_result.cost:.2e}",
                         flush=True,
                     )
-                    if candidate_result.cost <= args.accept_cost:
+                    if candidate_result.cost <= active_accept_cost:
                         next_A, result = candidate_A, candidate_result
                         restart_used = True
                         accepted_kind = kind
@@ -955,11 +1051,12 @@ def main() -> None:
                     if candidate_result.cost < result.cost:
                         next_A, result = candidate_A, candidate_result
 
-            if result.cost > args.accept_cost:
+            if result.cost > active_accept_cost:
                 status = "failed_fixed_target_multistart"
                 metadata["failure"] = {
                     "attempted_step": step,
                     "time": args.base_time + step * protocol.delta_t,
+                    "accept_cost": active_accept_cost,
                     "warm_start_cost": warm_cost,
                     "best_cost": result.cost,
                     "best_target_residual": result.residual_norm,
@@ -1009,6 +1106,7 @@ def main() -> None:
                     ),
                     "first_step_cg_seconds": first_step_cg_seconds,
                     "optimizer_cost": result.cost,
+                    "accept_cost": active_accept_cost,
                     "target_residual": result.residual_norm,
                     "optimizer_status": result.status,
                     "optimizer_evaluations": len(result.history),

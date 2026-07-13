@@ -11,6 +11,7 @@ import numpy as np
 
 from lomps.canonical import random_left_canonical
 from lomps.evolution import (
+    effective_first_step_accept_cost,
     effective_initial_seed_lift_noise,
     first_step_cg_options,
     infer_block_length,
@@ -84,9 +85,12 @@ class EvolutionProtocolTests(unittest.TestCase):
             accept_cost=3e-16,
             rank_tolerance=1e-12,
             fixed_point_solver="fast",
+            linear_solver="normal",
         )
         self.assertEqual(primary.fixed_point_solver, "fast")
         self.assertEqual(strict.fixed_point_solver, "fast")
+        self.assertEqual(primary.linear_solver, "normal")
+        self.assertEqual(strict.linear_solver, "normal")
 
     def test_parse_seed_list_deduplicates_and_ignores_blanks(self) -> None:
         self.assertEqual(parse_seed_list(" 2, , 5,2,8 "), (2, 5, 8))
@@ -112,9 +116,33 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertIsNone(args.initial_seed_lift_noise_amplitude)
         self.assertEqual(args.target_contraction, "tensor")
         self.assertEqual(args.target_source_fixed_point_solver, "dense")
+        self.assertEqual(args.lm_linear_solver, "normal")
+        self.assertIsNone(args.first_step_accept_cost)
         self.assertEqual(args.first_step_optimizer, "cg-lm")
         self.assertTrue(args.first_step_cg_precondition)
         self.assertFalse(args.first_step_cg_verbose)
+        self.assertTrue(args.strict_retry)
+
+    def test_strict_retry_can_be_disabled(self) -> None:
+        argv = [
+            "lomps-evolve",
+            "--initial-A",
+            "product.npy",
+            "--output-dir",
+            "out",
+            "--steps",
+            "1",
+            "--base-time",
+            "0.0",
+            "--no-strict-retry",
+        ]
+        with patch("sys.argv", argv):
+            args = parse_args()
+        self.assertFalse(args.strict_retry)
+
+    def test_first_step_accept_cost_defaults_to_global_cost(self) -> None:
+        self.assertEqual(effective_first_step_accept_cost(None, 3e-16), 3e-16)
+        self.assertEqual(effective_first_step_accept_cost(1e-15, 3e-16), 1e-15)
 
     def test_external_seed_lift_noise_default_is_larger_for_high_D(self) -> None:
         self.assertEqual(
