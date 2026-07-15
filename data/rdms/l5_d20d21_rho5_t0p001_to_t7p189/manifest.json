@@ -1,0 +1,222 @@
+{
+  "dataset_name": "l5_d20d21_rho5_t0p001_to_t7p189",
+  "created_by": "package_l5_d20d21_datasets.py",
+  "warning": "This is a stitched L=5 trajectory, not a single homogeneous production run. It uses D=20 tensors from t=0.001 through t=4.481. The D=20 attempted step to t=4.482 failed; the trajectory then switches to a manually found D=21 tensor that fits the D=20-derived t=4.482 target with cost 8.0568347154143779e-15. The D=21 branch continues from t=4.482 to the current paused endpoint t=7.189. The D=20 segment also contains a manual recovery at t=4.437 with accepted cost 1.1617915215754042e-15.",
+  "physical_model": "nonintegrable Ising quench",
+  "block_length": 5,
+  "delta_t": 0.001,
+  "time_window": {
+    "first_time": 0.001,
+    "last_time": 7.189,
+    "points": 7189
+  },
+  "counts_by_bond_dimension": {
+    "20": 4481,
+    "21": 2708
+  },
+  "stitch_events": [
+    {
+      "time": 4.437,
+      "kind": "manual_D20_recovery",
+      "accepted_cost": 1.1617915215754042e-15,
+      "note": "manual recovery filled failed D=20 step 638"
+    },
+    {
+      "time": 4.482,
+      "kind": "bond_dimension_switch_D20_to_D21",
+      "previous_D20_time": 4.481,
+      "accepted_fit_cost": 8.056834715414378e-15,
+      "note": "D=21 tensor fits D=20-derived t=4.482 target"
+    }
+  ],
+  "segments": [
+    {
+      "index": 0,
+      "name": "lomps_l5d20_evolution_smoke_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_evolution_smoke_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 6,
+      "accepted_points": 5,
+      "first_time": 0.001,
+      "last_time": 0.005,
+      "notes": "early smoke segment; metadata predates resumable runner",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 1,
+      "name": "lomps_l5d20_relaxed_continuation_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_continuation_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 21,
+      "accepted_points": 20,
+      "first_time": 0.006,
+      "last_time": 0.025,
+      "notes": "early continuation segment; metadata predates resumable runner",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 2,
+      "name": "lomps_l5d20_relaxed_halfhour_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_halfhour_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 48,
+      "accepted_points": 47,
+      "first_time": 0.026,
+      "last_time": 0.072,
+      "notes": "early continuation segment; accepted count from audit summary",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 3,
+      "name": "lomps_l5d20_relaxed_hour_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_hour_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 97,
+      "accepted_points": 96,
+      "first_time": 0.073,
+      "last_time": 0.168,
+      "notes": "early continuation segment; accepted count from audit summary",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 4,
+      "name": "lomps_l5d20_relaxed_hour2_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_hour2_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 102,
+      "accepted_points": 101,
+      "first_time": 0.169,
+      "last_time": 0.269,
+      "notes": "early continuation segment; accepted count from audit summary",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 5,
+      "name": "lomps_l5d20_relaxed_overnight_20260709",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_overnight_20260709",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 742,
+      "accepted_points": 741,
+      "first_time": 0.27,
+      "last_time": 1.01,
+      "notes": "early continuation segment; accepted count from audit summary",
+      "source_metadata_status": null,
+      "source_metadata_completed_steps": null
+    },
+    {
+      "index": 6,
+      "name": "lomps_l5d20_relaxed_10h_from_t1p010_20260710",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_10h_from_t1p010_20260710",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 873,
+      "accepted_points": 872,
+      "first_time": 1.011,
+      "last_time": 1.882,
+      "notes": "metadata lacks times.npy; count from metadata/steps.csv",
+      "source_metadata_status": "paused_by_run_time_limit",
+      "source_metadata_completed_steps": 872
+    },
+    {
+      "index": 7,
+      "name": "lomps_l5d20_relaxed_10h_from_t1p882_20260711",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_10h_from_t1p882_20260711",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 636,
+      "accepted_points": 635,
+      "first_time": 1.883,
+      "last_time": 2.517,
+      "notes": "starts after duplicate base-time row at t=1.882",
+      "source_metadata_status": "paused_by_run_time_limit",
+      "source_metadata_completed_steps": 635
+    },
+    {
+      "index": 8,
+      "name": "lomps_l5d20_relaxed_10h_from_t2p517_20260711",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_10h_from_t2p517_20260711",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 781,
+      "accepted_points": 780,
+      "first_time": 2.518,
+      "last_time": 3.297,
+      "notes": "starts after duplicate base-time row at t=2.517",
+      "source_metadata_status": "paused_by_run_time_limit",
+      "source_metadata_completed_steps": 780
+    },
+    {
+      "index": 9,
+      "name": "lomps_l5d20_relaxed_8h_from_t3p297_20260712",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_8h_from_t3p297_20260712",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 503,
+      "accepted_points": 502,
+      "first_time": 3.298,
+      "last_time": 3.799,
+      "notes": "starts after duplicate base-time row at t=3.297",
+      "source_metadata_status": "paused_by_PAUSE_file",
+      "source_metadata_completed_steps": 502
+    },
+    {
+      "index": 10,
+      "name": "lomps_l5d20_relaxed_12h_from_t3p799_20260712",
+      "source_path": "/private/tmp/lomps_l5d20_relaxed_12h_from_t3p799_20260712",
+      "bond_dimension": 20,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 683,
+      "accepted_points": 682,
+      "first_time": 3.8,
+      "last_time": 4.481,
+      "notes": "contains manual recovery at t=4.437; D=20 branch stops after accepted step 682 at t=4.481",
+      "source_metadata_status": "failed_fixed_target_multistart",
+      "source_metadata_completed_steps": 682
+    },
+    {
+      "index": 11,
+      "name": "lomps_l5d21_from_t4p482_20260713",
+      "source_path": "/private/tmp/lomps_l5d21_from_t4p482_20260713",
+      "bond_dimension": 21,
+      "row_start_in_source": 0,
+      "row_stop_exclusive_in_source": 1318,
+      "accepted_points": 1318,
+      "first_time": 4.482,
+      "last_time": 5.799,
+      "notes": "stitched D=21 branch; row 0 is accepted D=21 fit to the D=20-derived t=4.482 target",
+      "source_metadata_status": "completed",
+      "source_metadata_completed_steps": 1317
+    },
+    {
+      "index": 12,
+      "name": "lomps_l5d21_from_t5p799_to_t10_20260714",
+      "source_path": "/private/tmp/lomps_l5d21_from_t5p799_to_t10_20260714",
+      "bond_dimension": 21,
+      "row_start_in_source": 1,
+      "row_stop_exclusive_in_source": 1391,
+      "accepted_points": 1390,
+      "first_time": 5.8,
+      "last_time": 7.189,
+      "notes": "starts after duplicate base-time row at t=5.799; paused at t=7.189",
+      "source_metadata_status": "paused_by_PAUSE_file",
+      "source_metadata_completed_steps": 1390
+    }
+  ],
+  "rho5_diagnostics": {
+    "max_trace_error": 4.962698458832438e-14,
+    "max_hermiticity_frobenius_error": 1.5053137206715095e-15
+  },
+  "parent_trajectory_dataset": "data/trajectories/l5_d20d21_stitched_t0p001_to_t7p189",
+  "contents": "five-site reduced density matrices rho5 only"
+}
