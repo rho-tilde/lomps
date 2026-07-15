@@ -48,6 +48,7 @@ lomps-run \
   --bond-dimension 10 \
   --block-length 4 \
   --fixed-point-solver dense \
+  --accept-cost 3e-16 \
   --steps 100 \
   --base-time 3.235
 ```
@@ -82,12 +83,13 @@ trajectory bond dimension. This avoids treating a product state as if it were
 already a healthy injective high-D tensor.
 
 For product starts, the default `--initial-seed-mode embedding` follows the
-historical QDMT start-point convention: the product tensor is embedded into
+production QDMT start-point convention: the product tensor is embedded into
 the upper-left virtual block, tiny deterministic noise is added only in the
 new virtual subspace, and the result is QR-projected back to the canonical
 manifold. This lifted tensor is only the optimizer seed; the first target RDM
 is still built from the original low-D product source. The default lift noise
-is `--embedding-noise-amplitude 1e-8`.
+is `--embedding-noise-amplitude 1e-6`. The historical `1e-8` noise can still
+be requested explicitly for audits.
 
 When the input source has lower bond dimension than the trajectory tensor,
 the default `--first-step-optimizer cg-lm` fits this first frozen target with
@@ -95,6 +97,12 @@ the historical-style analytic fixed-target Grassmann CG, then polishes the
 same target with the gauge-orthogonal LM optimizer. This is the recommended
 product-state launch path. Use `--first-step-cg-verbose` to print the CG
 iteration trace for long first-step solves.
+
+The default stopping criteria are deliberately asymmetric for product starts:
+`--first-step-accept-cost 3e-16` keeps the A1 fit strict, while recurrent
+trajectory steps default to `--accept-cost 1e-14` to avoid expensive retries at
+the floating-point floor. Pass `--accept-cost 3e-16` explicitly for historical
+strict-continuation checks.
 
 For less structured low-D starts, `--embedding-candidate-seeds` accepts a
 comma-separated list of lift seeds, screens them against the exact first target
@@ -116,7 +124,9 @@ two-site-periodic circuit MPS has alternating bond dimensions 4 and 8, and
 LOMPS embeds the pair into one off-diagonal one-site tensor. A small
 deterministic Stiefel mixing, controlled by
 `--circuit-lift-mixing-amplitude`, breaks the exact period-two transfer
-degeneracy before the first optimizer polish.
+degeneracy before the first optimizer polish. This construction is retained as
+an experimental diagnostic path, not as the default product launch, because it
+has not been robust in the production product-start tests so far.
 
 For a dimension-count estimate of the smallest bond dimension needed to fit
 generic translation-invariant local data, use
@@ -146,8 +156,10 @@ full light-cone unitary; `--target-contraction dense` keeps the old
 when filling or falling back from the target-source cache is controlled
 separately by `--target-source-fixed-point-solver`.
 
-See [docs/algorithm.md](docs/algorithm.md) for the mathematical outline and
-the TOML files in [configs](configs/) for the reference parameters.
+See [docs/algorithm.md](docs/algorithm.md) for the mathematical outline,
+[docs/product_starts.md](docs/product_starts.md) for the product-state launch
+runbook and audits, and the TOML files in [configs](configs/) for the
+reference parameters.
 
 ## Reference data
 

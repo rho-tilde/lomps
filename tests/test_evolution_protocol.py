@@ -30,6 +30,7 @@ from lomps.rdm import block_rdm
 def protocol_args(block_length: int = 4) -> Namespace:
     return Namespace(
         block_length=block_length,
+        delta_t=NONINTEGRABLE_ISING.delta_t,
         odd_parity_warning_threshold=1e-6,
         target_contraction=NONINTEGRABLE_ISING.target_contraction,
         target_source_fixed_point_solver=(
@@ -96,7 +97,7 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertEqual(parse_seed_list(" 2, , 5,2,8 "), (2, 5, 8))
         self.assertEqual(parse_seed_list(""), ())
 
-    def test_product_start_defaults_to_historical_embedding_seed(self) -> None:
+    def test_product_start_defaults_to_production_embedding_seed(self) -> None:
         argv = [
             "lomps-evolve",
             "--initial-A",
@@ -111,17 +112,26 @@ class EvolutionProtocolTests(unittest.TestCase):
         with patch("sys.argv", argv):
             args = parse_args()
         self.assertEqual(args.initial_seed_mode, "embedding")
-        self.assertEqual(args.embedding_noise_amplitude, 1e-8)
+        self.assertEqual(args.embedding_noise_amplitude, 1e-6)
         self.assertIsNone(args.initial_seed_A)
         self.assertIsNone(args.initial_seed_lift_noise_amplitude)
         self.assertEqual(args.target_contraction, "tensor")
         self.assertEqual(args.target_source_fixed_point_solver, "dense")
+        self.assertEqual(args.delta_t, NONINTEGRABLE_ISING.delta_t)
         self.assertEqual(args.lm_linear_solver, "normal")
-        self.assertIsNone(args.first_step_accept_cost)
+        self.assertEqual(args.accept_cost, 1e-14)
+        self.assertEqual(args.first_step_accept_cost, 3e-16)
         self.assertEqual(args.first_step_optimizer, "cg-lm")
         self.assertTrue(args.first_step_cg_precondition)
         self.assertFalse(args.first_step_cg_verbose)
         self.assertTrue(args.strict_retry)
+
+    def test_delta_t_can_override_reference_protocol(self) -> None:
+        args = protocol_args()
+        args.delta_t = 5e-4
+        protocol = protocol_from_args(args)
+        self.assertEqual(protocol.delta_t, 5e-4)
+        self.assertEqual(protocol.block_length, NONINTEGRABLE_ISING.block_length)
 
     def test_strict_retry_can_be_disabled(self) -> None:
         argv = [
@@ -140,7 +150,7 @@ class EvolutionProtocolTests(unittest.TestCase):
             args = parse_args()
         self.assertFalse(args.strict_retry)
 
-    def test_first_step_accept_cost_defaults_to_global_cost(self) -> None:
+    def test_effective_first_step_accept_cost_uses_global_cost_when_none(self) -> None:
         self.assertEqual(effective_first_step_accept_cost(None, 3e-16), 3e-16)
         self.assertEqual(effective_first_step_accept_cost(1e-15, 3e-16), 1e-15)
 

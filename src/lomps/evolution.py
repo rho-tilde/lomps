@@ -40,6 +40,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-time", type=float, required=True)
     parser.add_argument("--block-length", type=int, default=NONINTEGRABLE_ISING.block_length)
     parser.add_argument(
+        "--delta-t",
+        type=float,
+        default=NONINTEGRABLE_ISING.delta_t,
+        help=(
+            "Trotter step size for the nonintegrable Ising protocol. "
+            "Defaults to the historical benchmark value 1e-3."
+        ),
+    )
+    parser.add_argument(
         "--bond-dimension",
         type=int,
         default=0,
@@ -92,14 +101,23 @@ def parse_args() -> argparse.Namespace:
             "target. This can be set independently from --fixed-point-solver."
         ),
     )
-    parser.add_argument("--accept-cost", type=float, default=3e-16)
+    parser.add_argument(
+        "--accept-cost",
+        type=float,
+        default=1e-14,
+        help=(
+            "Acceptance threshold for recurrent trajectory steps. The default "
+            "is relaxed relative to the first product fit so continuation "
+            "does not spend time chasing the floating-point floor."
+        ),
+    )
     parser.add_argument(
         "--first-step-accept-cost",
         type=float,
-        default=None,
+        default=3e-16,
         help=(
-            "Optional acceptance threshold only for the first low-D source to "
-            "trajectory-D fit. Later trajectory steps still use --accept-cost."
+            "Acceptance threshold only for the first low-D source to "
+            "trajectory-D fit. Later trajectory steps use --accept-cost."
         ),
     )
     parser.add_argument("--rank-tolerance", type=float, default=1e-12)
@@ -139,7 +157,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--embedding-noise-amplitude",
         type=float,
-        default=1e-8,
+        default=1e-6,
         help=(
             "Noise used only to form the lifted optimizer seed. The first "
             "RDM target is still built from the original input source."
@@ -399,12 +417,15 @@ def first_step_cg_options(
 def protocol_from_args(args: argparse.Namespace):
     if args.block_length < 1:
         raise ValueError("--block-length must be positive")
+    if args.delta_t <= 0:
+        raise ValueError("--delta-t must be positive")
     if args.odd_parity_warning_threshold < 0:
         raise ValueError("--odd-parity-warning-threshold must be non-negative")
     protocol = replace(
         NONINTEGRABLE_ISING,
         name=f"nonintegrable_ising_L{args.block_length}",
         block_length=args.block_length,
+        delta_t=args.delta_t,
         odd_parity_warning_threshold=args.odd_parity_warning_threshold,
         target_contraction=args.target_contraction,
         target_source_fixed_point_solver=args.target_source_fixed_point_solver,

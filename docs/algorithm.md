@@ -12,14 +12,33 @@ from the high-D trajectory tensor itself. This keeps product starts physically
 exact at the first update without forcing a product state to masquerade as an
 injective high-D tensor.
 
-For product starts, the default `auto` seed mode uses the known circuit
-structure of the first step. LOMPS applies the finite even-half / odd-full /
-even-half Strang circuit to a product MPS, keeps the central two tensors of
-the resulting two-site-periodic MPS, and embeds them into one off-diagonal
-one-site tensor. In the qubit L=4 protocol the alternating bond dimensions are
-4 and 8, giving a D=12 left-canonical seed. A small deterministic Stiefel
-mixing breaks the exact period-two transfer degeneracy; the first fixed-target
-optimizer step then polishes the seed against the unchanged first target.
+For product starts, the default seed mode is `embedding`, not the circuit
+construction. LOMPS embeds the product tensor into the upper-left virtual block
+of the requested trajectory bond dimension, adds deterministic noise only
+outside the old virtual block, and QR-projects the result back to the
+left-canonical manifold. This seed is deliberately treated only as an optimizer
+starting point; it is not used to define the first physical target. The current
+production default is `--embedding-noise-amplitude 1e-6`; the older `1e-8`
+setting remains available for explicit audits.
+
+When the input source has lower bond dimension than the trajectory tensor, the
+default first-step optimizer is `cg-lm`. LOMPS first fits the frozen first target
+with the historical-style analytic fixed-target Grassmann CG, then polishes the
+same target with the gauge-orthogonal LM optimizer. The CG stage is used only
+for this first low-D-to-high-D fit by default; later trajectory updates use the
+LM warm start and the usual restart protocol.
+
+The product-circuit seed remains available as an explicit opt-in through
+`--initial-seed-mode circuit`, or through `--initial-seed-mode auto` when the
+protocol supports it. It applies the finite even-half / odd-full / even-half
+Strang circuit to a product MPS, keeps the central two tensors of the resulting
+two-site-periodic MPS, and embeds them into one off-diagonal one-site tensor. In
+the qubit L=4 protocol the alternating bond dimensions are 4 and 8, giving a
+D=12 left-canonical seed. A small deterministic Stiefel mixing breaks the exact
+period-two transfer degeneracy before the first optimizer polish. This path is
+kept as a useful diagnostic/experimental construction, but it is not the
+recommended default because it has not been robust in the production product
+launches tested so far.
 
 The generic embedding path is still available for other low-D starts. If
 `--embedding-candidate-seeds` is provided, the runner constructs each candidate
