@@ -1,0 +1,42 @@
+[protocol]
+preset = "integrable-tfim"
+name = "integrable_tfim_g1_0p2_L4"
+physical_hamiltonian = "H = -sum(ZZ) - 0.2*sum(X)"
+bond_hamiltonian = "H_bond = -ZZ - 0.2*(X tensor I)"
+physical_dimension = 2
+bond_dimension = 12
+block_length = 4
+delta_t = 0.001
+g = -0.2
+h = 0.0
+J = -1.0
+trotter_order = 2
+symmetric_transverse = false
+
+[initial_state]
+description = "D=12 VUMPS ground state at physical g0=1.5"
+path = "data/integrable_tfim_reference/tfim_g0_1p5_D12.npy"
+layout = "physical-left-right"
+sha256 = "38df4b6bacd1f6b749b23357a77328a7d1d76e91cb6e086b1338fa47ee7d9631"
+
+[trajectory]
+base_time = 0.0
+steps = 20000
+final_time = 20.0
+checkpoint_every = 25
+
+[optimizer]
+method = "gauge_orthogonal_levenberg_marquardt"
+fixed_point_solver = "dense"
+target_source_fixed_point_solver = "dense"
+target_contraction = "tensor"
+gradient_tolerance = 1e-11
+cost_tolerance = 1e-15
+maximum_iterations = 40000
+
+[restart]
+fixed_target = true
+strict_retry = false
+perturb_amplitudes = [0.1, 0.3, 0.6, 1.0]
+perturbations_per_amplitude = 3
+haar_random_restarts = 0

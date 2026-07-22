@@ -23,14 +23,19 @@ from lomps.evolution import (
     select_initial_seed,
 )
 from lomps.embedding import product_tensor
-from lomps.protocol import NONINTEGRABLE_ISING
+from lomps.protocol import INTEGRABLE_TFIM, NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
 
 
 def protocol_args(block_length: int = 4) -> Namespace:
     return Namespace(
+        protocol="nonintegrable-ising",
         block_length=block_length,
         delta_t=NONINTEGRABLE_ISING.delta_t,
+        g=None,
+        h=None,
+        J=None,
+        symmetric_transverse=None,
         odd_parity_warning_threshold=1e-6,
         target_contraction=NONINTEGRABLE_ISING.target_contraction,
         target_source_fixed_point_solver=(
@@ -117,7 +122,13 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertIsNone(args.initial_seed_lift_noise_amplitude)
         self.assertEqual(args.target_contraction, "tensor")
         self.assertEqual(args.target_source_fixed_point_solver, "dense")
-        self.assertEqual(args.delta_t, NONINTEGRABLE_ISING.delta_t)
+        self.assertEqual(args.protocol, "nonintegrable-ising")
+        self.assertIsNone(args.block_length)
+        self.assertIsNone(args.delta_t)
+        self.assertIsNone(args.g)
+        self.assertIsNone(args.h)
+        self.assertIsNone(args.J)
+        self.assertIsNone(args.symmetric_transverse)
         self.assertEqual(args.lm_linear_solver, "normal")
         self.assertEqual(args.accept_cost, 1e-14)
         self.assertEqual(args.first_step_accept_cost, 3e-16)
@@ -132,6 +143,28 @@ class EvolutionProtocolTests(unittest.TestCase):
         protocol = protocol_from_args(args)
         self.assertEqual(protocol.delta_t, 5e-4)
         self.assertEqual(protocol.block_length, NONINTEGRABLE_ISING.block_length)
+
+    def test_integrable_preset_and_hamiltonian_overrides(self) -> None:
+        args = protocol_args()
+        args.protocol = "integrable-tfim"
+        args.block_length = None
+        args.delta_t = None
+        protocol = protocol_from_args(args)
+        self.assertEqual(protocol, INTEGRABLE_TFIM)
+        self.assertEqual(protocol.g, -0.2)
+        self.assertEqual(protocol.h, 0.0)
+        self.assertEqual(protocol.J, -1.0)
+        self.assertFalse(protocol.symmetric_transverse)
+
+        args.block_length = 5
+        args.delta_t = 5e-4
+        args.g = -0.3
+        args.symmetric_transverse = True
+        overridden = protocol_from_args(args)
+        self.assertEqual(overridden.block_length, 5)
+        self.assertEqual(overridden.delta_t, 5e-4)
+        self.assertEqual(overridden.g, -0.3)
+        self.assertTrue(overridden.symmetric_transverse)
 
     def test_strict_retry_can_be_disabled(self) -> None:
         argv = [

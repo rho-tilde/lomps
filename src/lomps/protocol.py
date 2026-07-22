@@ -167,6 +167,45 @@ NONINTEGRABLE_ISING = LocalEvolutionProtocol(
 )
 
 
+# Historical integrable quench convention:
+#
+#     H = - sum_j Z_j Z_{j+1} - g_physical sum_j X_j,
+#     g_physical: 1.5 -> 0.2.
+#
+# The asymmetric bond Hamiltonian used by the original QDMT implementation is
+# J ZZ + g (X \otimes I) + h (Z \otimes I). Consequently the post-quench
+# physical field g_physical=+0.2 is represented below by the Python coefficient
+# g=-0.2. Keeping the sign here, rather than repairing it at call sites, makes
+# this preset reproduce the historical gate convention exactly.
+INTEGRABLE_TFIM = LocalEvolutionProtocol(
+    name="integrable_tfim_g1_0p2_L4",
+    block_length=4,
+    delta_t=1e-3,
+    g=-0.2,
+    h=0.0,
+    J=-1.0,
+    trotter_order=2,
+    symmetric_transverse=False,
+)
+
+
+DEFAULT_PROTOCOL_PRESET = "nonintegrable-ising"
+PROTOCOL_PRESETS: dict[str, LocalEvolutionProtocol] = {
+    DEFAULT_PROTOCOL_PRESET: NONINTEGRABLE_ISING,
+    "integrable-tfim": INTEGRABLE_TFIM,
+}
+
+
+def protocol_preset(name: str) -> LocalEvolutionProtocol:
+    """Return a named immutable protocol preset."""
+
+    try:
+        return PROTOCOL_PRESETS[name]
+    except KeyError as error:
+        choices = ", ".join(sorted(PROTOCOL_PRESETS))
+        raise ValueError(f"unknown protocol preset {name!r}; choose from {choices}") from error
+
+
 def physical_product_state() -> Array:
     """Return the physical quench state ``(|0> + i|1>)/sqrt(2)``."""
 

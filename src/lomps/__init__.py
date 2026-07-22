@@ -13,6 +13,7 @@ from .embedding import (
     product_tensor,
 )
 from .fixed_target_cg import FixedTargetGrassmannCG, optimize_fixed_target_cg
+from .integrable import exact_local_hs_rate, exact_transverse_magnetization
 from .optimizer import (
     CGOptions,
     LMOptions,
@@ -28,8 +29,16 @@ from .observables import (
     one_site_rdm,
     trajectory_expectations,
 )
-from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
+from .protocol import (
+    DEFAULT_PROTOCOL_PRESET,
+    INTEGRABLE_TFIM,
+    PROTOCOL_PRESETS,
+    LocalEvolutionProtocol,
+    NONINTEGRABLE_ISING,
+    protocol_preset,
+)
 from .rdm import block_rdm
+from .tensor_io import TensorLoadInfo, load_tensor_file
 
 __all__ = [
     "LMOptions",
@@ -37,6 +46,12 @@ __all__ = [
     "CGOptions",
     "LocalEvolutionProtocol",
     "NONINTEGRABLE_ISING",
+    "INTEGRABLE_TFIM",
+    "DEFAULT_PROTOCOL_PRESET",
+    "PROTOCOL_PRESETS",
+    "protocol_preset",
+    "TensorLoadInfo",
+    "load_tensor_file",
     "block_rdm",
     "canonical_errors",
     "coerce_initial_tensor",
@@ -54,6 +69,8 @@ __all__ = [
     "optimize_fixed_target_cg",
     "product_circuit_left_canonical_seed",
     "product_tensor",
+    "exact_local_hs_rate",
+    "exact_transverse_magnetization",
     "quotient_tangent_dimension",
     "random_left_canonical",
     "translation_invariant_rdm_dimension",

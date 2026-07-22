@@ -23,29 +23,83 @@ from .canonical import (
 )
 from .embedding import (
     InitialLiftDiagnostics,
-    coerce_initial_tensor,
     lift_left_canonical_seed,
     product_circuit_left_canonical_seed,
 )
 from .fixed_target_cg import optimize_fixed_target_cg
 from .optimizer import CGOptions, LMOptions, optimizer_right_fixed_point, optimize_tensor
-from .protocol import LocalEvolutionProtocol, NONINTEGRABLE_ISING
+from .protocol import (
+    DEFAULT_PROTOCOL_PRESET,
+    PROTOCOL_PRESETS,
+    LocalEvolutionProtocol,
+    NONINTEGRABLE_ISING,
+    protocol_preset,
+)
+from .tensor_io import TensorLayout, load_tensor_file
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--protocol",
+        choices=tuple(PROTOCOL_PRESETS),
+        default=DEFAULT_PROTOCOL_PRESET,
+        help="Named Hamiltonian and Trotter convention preset.",
+    )
     parser.add_argument("--initial-A", type=Path, required=True)
+    parser.add_argument(
+        "--initial-key",
+        default=None,
+        help="Array key when --initial-A is a keyed .npz archive.",
+    )
+    parser.add_argument(
+        "--initial-layout",
+        choices=("auto", "physical-left-right", "legacy-left-physical-right"),
+        default="auto",
+        help="Axis convention of --initial-A. Native LOMPS tensors are physical-first.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--base-time", type=float, required=True)
-    parser.add_argument("--block-length", type=int, default=NONINTEGRABLE_ISING.block_length)
+    parser.add_argument(
+        "--block-length",
+        type=int,
+        default=None,
+        help="Matched RDM length; defaults to the selected protocol preset.",
+    )
     parser.add_argument(
         "--delta-t",
         type=float,
-        default=NONINTEGRABLE_ISING.delta_t,
+        default=None,
+        help="Trotter step size; defaults to the selected protocol preset.",
+    )
+    parser.add_argument(
+        "--g",
+        type=float,
+        default=None,
+        help="Override the preset coefficient of X tensor I in the bond Hamiltonian.",
+    )
+    parser.add_argument(
+        "--h",
+        type=float,
+        default=None,
+        help="Override the preset coefficient of Z tensor I in the bond Hamiltonian.",
+    )
+    parser.add_argument(
+        "--J",
+        "--coupling-J",
+        dest="J",
+        type=float,
+        default=None,
+        help="Override the preset coefficient of Z tensor Z in the bond Hamiltonian.",
+    )
+    parser.add_argument(
+        "--symmetric-transverse",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
-            "Trotter step size for the nonintegrable Ising protocol. "
-            "Defaults to the historical benchmark value 1e-3."
+            "Split the transverse field equally over both sites of each bond gate. "
+            "The historical integrable benchmark uses --no-symmetric-transverse."
         ),
     )
     parser.add_argument(
@@ -67,6 +121,17 @@ def parse_args() -> argparse.Namespace:
             "built from --initial-A; this tensor only initializes the trajectory "
             "manifold and is lifted if its bond dimension is smaller."
         ),
+    )
+    parser.add_argument(
+        "--initial-seed-key",
+        default=None,
+        help="Array key when --initial-seed-A is a keyed .npz archive.",
+    )
+    parser.add_argument(
+        "--initial-seed-layout",
+        choices=("auto", "physical-left-right", "legacy-left-physical-right"),
+        default="auto",
+        help="Axis convention of --initial-seed-A.",
     )
     parser.add_argument(
         "--initial-seed-lift-noise-amplitude",
@@ -308,9 +373,14 @@ def append_csv(path: Path, row: dict[str, Any]) -> None:
         handle.flush()
 
 
-def load_initial(path: Path) -> np.ndarray:
-    value = np.load(path, allow_pickle=False)
-    return coerce_initial_tensor(value)
+def load_initial(
+    path: Path,
+    *,
+    key: str | None = None,
+    layout: TensorLayout = "auto",
+) -> np.ndarray:
+    tensor, _ = load_tensor_file(path, key=key, layout=layout)
+    return tensor
 
 
 def parse_seed_list(text: str) -> tuple[int, ...]:
@@ -415,17 +485,32 @@ def first_step_cg_options(
 
 
 def protocol_from_args(args: argparse.Namespace):
-    if args.block_length < 1:
+    preset_name = getattr(args, "protocol", DEFAULT_PROTOCOL_PRESET)
+    base = protocol_preset(preset_name)
+    block_length = (
+        base.block_length if getattr(args, "block_length", None) is None else args.block_length
+    )
+    delta_t = base.delta_t if getattr(args, "delta_t", None) is None else args.delta_t
+    if block_length < 1:
         raise ValueError("--block-length must be positive")
-    if args.delta_t <= 0:
+    if delta_t <= 0:
         raise ValueError("--delta-t must be positive")
     if args.odd_parity_warning_threshold < 0:
         raise ValueError("--odd-parity-warning-threshold must be non-negative")
+    name_prefix = base.name.rsplit("_L", maxsplit=1)[0]
     protocol = replace(
-        NONINTEGRABLE_ISING,
-        name=f"nonintegrable_ising_L{args.block_length}",
-        block_length=args.block_length,
-        delta_t=args.delta_t,
+        base,
+        name=f"{name_prefix}_L{block_length}",
+        block_length=block_length,
+        delta_t=delta_t,
+        g=base.g if getattr(args, "g", None) is None else args.g,
+        h=base.h if getattr(args, "h", None) is None else args.h,
+        J=base.J if getattr(args, "J", None) is None else args.J,
+        symmetric_transverse=(
+            base.symmetric_transverse
+            if getattr(args, "symmetric_transverse", None) is None
+            else args.symmetric_transverse
+        ),
         odd_parity_warning_threshold=args.odd_parity_warning_threshold,
         target_contraction=args.target_contraction,
         target_source_fixed_point_solver=args.target_source_fixed_point_solver,
@@ -715,10 +800,20 @@ def main() -> None:
     amplitudes = tuple(float(value) for value in args.perturb_amplitudes.split(","))
     if not amplitudes or args.perturbations_per_amplitude < 0 or args.random_restarts < 0:
         raise ValueError("invalid restart counts or amplitudes")
-    initial_source = load_initial(args.initial_A)
-    initial_seed_source = (
-        None if args.initial_seed_A is None else load_initial(args.initial_seed_A)
+    initial_source, initial_source_input = load_tensor_file(
+        args.initial_A,
+        key=args.initial_key,
+        layout=args.initial_layout,
     )
+    if args.initial_seed_A is None:
+        initial_seed_source = None
+        initial_seed_source_input = None
+    else:
+        initial_seed_source, initial_seed_source_input = load_tensor_file(
+            args.initial_seed_A,
+            key=args.initial_seed_key,
+            layout=args.initial_seed_layout,
+        )
     trajectory_bond_dimension = (
         (
             initial_seed_source.shape[1]
@@ -896,11 +991,18 @@ def main() -> None:
         metadata = {
             "status": "running",
             "created_at": utc_now(),
+            "protocol_preset": args.protocol,
             "initial_A": str(args.initial_A.resolve()),
+            "initial_A_input": initial_source_input.to_json(),
             "initial_seed_A": (
                 None
                 if args.initial_seed_A is None
                 else str(args.initial_seed_A.resolve())
+            ),
+            "initial_seed_A_input": (
+                None
+                if initial_seed_source_input is None
+                else initial_seed_source_input.to_json()
             ),
             "initial_source_store": initial_source_path.name,
             "initial_source_right_fixed_point_store": (

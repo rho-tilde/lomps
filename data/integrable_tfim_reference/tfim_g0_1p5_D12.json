@@ -1,0 +1,28 @@
+{
+  "format": "LOMPS tensor conversion v1",
+  "tensor_convention": "(physical, left, right)",
+  "input": {
+    "source_path": "historical_qdmt/data/ground_state/tfim_AL_D12_g1.5.npz",
+    "source_sha256": "f7b2aef89ecb1222eb322e099337856074c84d92ef08fc5858812d9684f53e3c",
+    "archive_key": "A",
+    "requested_layout": "legacy-left-physical-right",
+    "detected_layout": "legacy-left-physical-right",
+    "source_shape": [
+      12,
+      2,
+      12
+    ],
+    "output_shape": [
+      2,
+      12,
+      12
+    ]
+  },
+  "output_path": "data/integrable_tfim_reference/tfim_g0_1p5_D12.npy",
+  "output_sha256": "38df4b6bacd1f6b749b23357a77328a7d1d76e91cb6e086b1338fa47ee7d9631",
+  "dtype": "complex128",
+  "canonical_diagnostics": {
+    "stiefel_error": 2.9154458133446255e-15,
+    "left_canonical_error": 2.7429572725318298e-15
+  }
+}

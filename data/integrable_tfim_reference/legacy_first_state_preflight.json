@@ -1,0 +1,43 @@
+{
+  "reference": {
+    "initial_input": {
+      "source_path": "data/integrable_tfim_reference/tfim_g0_1p5_D12.npy",
+      "source_sha256": "38df4b6bacd1f6b749b23357a77328a7d1d76e91cb6e086b1338fa47ee7d9631",
+      "archive_key": null,
+      "requested_layout": "auto",
+      "detected_layout": "physical-left-right",
+      "source_shape": [
+        2,
+        12,
+        12
+      ],
+      "output_shape": [
+        2,
+        12,
+        12
+      ]
+    },
+    "initial_canonical": {
+      "stiefel_error": 2.9154458133446255e-15,
+      "left_canonical_error": 2.7429572725318298e-15
+    },
+    "initial_fixed_point": {
+      "eigenvalue": 1.0000000000000007,
+      "residual": 7.027340885623708e-16,
+      "trace": 1.0,
+      "hermiticity_error": 0.0,
+      "min_eigenvalue": 4.034260047144148e-15
+    },
+    "tensor_vs_dense_target_frobenius": 2.241013186354302e-16,
+    "legacy_first_state": {
+      "path": "historical_qdmt/results/integrable_test/benchmark_dt=0.001_steps=19999_tol=1e-09_it=10000_D=12_cut=172800.npz",
+      "time": 0.001,
+      "candidate_half_squared_frobenius_costs": {
+        "integrable_asymmetric_g_minus_0p2": 1.8793160332522793e-15,
+        "integrable_symmetric_g_minus_0p2": 1.8794997927004558e-15,
+        "integrable_asymmetric_wrong_sign_g_plus_0p2": 1.8516858295450793e-07,
+        "nonintegrable": 3.2035402056370932e-06
+      }
+    }
+  }
+}

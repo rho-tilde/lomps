@@ -13,7 +13,7 @@ The core implementation provides:
 - gauge-orthogonal Levenberg--Marquardt updates with polar retraction;
 - reproducible dense fixed-point solves by default, with an explicit fast
   ARPACK option for exploratory runs;
-- configurable second-order non-integrable Ising quench protocols, with
+- named integrable and non-integrable second-order Ising quench protocols, with
   symmetric even-`L` and parity-averaged odd-`L` local windows;
 - tensor-axis target evolution that applies the Trotter gates locally instead
   of materializing the full light-cone brickwall unitary;
@@ -56,6 +56,27 @@ lomps-run \
 Create `runs/d10/PAUSE` to pause between timesteps. Remove it and append
 `--resume` to the same command to continue.
 
+Run the integrable TFIM reference quench with the committed VUMPS ground-state
+tensor:
+
+```bash
+lomps-run \
+  --protocol integrable-tfim \
+  --initial-A data/integrable_tfim_reference/tfim_g0_1p5_D12.npy \
+  --initial-layout physical-left-right \
+  --output-dir runs/integrable_tfim_l4_d12 \
+  --bond-dimension 12 \
+  --block-length 4 \
+  --delta-t 1e-3 \
+  --accept-cost 1e-15 \
+  --steps 20000 \
+  --base-time 0
+```
+
+See [docs/integrable_benchmarks.md](docs/integrable_benchmarks.md) for the
+Hamiltonian sign convention, production restart settings, static legacy-data
+preflight, exact-solution audit, and resume procedure.
+
 ## Conventions
 
 Tensors have shape `(physical, left, right)` and are left canonical:
@@ -81,6 +102,12 @@ the original low-D tensor to build the first physical target and separately
 constructs a deterministic lifted left-canonical seed at the requested
 trajectory bond dimension. This avoids treating a product state as if it were
 already a healthy injective high-D tensor.
+
+Native tensor files are `.npy` arrays in `(physical,left,right)` order. Keyed
+`.npz` inputs and historical `(left,physical,right)` arrays are supported with
+`--initial-key` and `--initial-layout`. The `lomps-convert-tensor` command writes
+a native `.npy` plus a provenance sidecar containing hashes and canonical
+diagnostics.
 
 For product starts, the default `--initial-seed-mode embedding` follows the
 production QDMT start-point convention: the product tensor is embedded into
@@ -158,8 +185,9 @@ separately by `--target-source-fixed-point-solver`.
 
 See [docs/algorithm.md](docs/algorithm.md) for the mathematical outline,
 [docs/product_starts.md](docs/product_starts.md) for the product-state launch
-runbook and audits, and the TOML files in [configs](configs/) for the
-reference parameters.
+runbook and audits, [docs/integrable_benchmarks.md](docs/integrable_benchmarks.md)
+for the integrable-quench runbook, and the TOML files in [configs](configs/)
+for the reference parameters.
 
 ## Reference data
 
@@ -169,6 +197,9 @@ The repository includes two compact checkpoint tensors:
   non-integrable D=12 trajectory, used for reproducible comparisons;
 - `nonintegrable_d10_t3p235.npy`: the last valid D=10 tensor immediately before
   a warm-start plateau, used to exercise fixed-target rescue.
+- `integrable_tfim_reference/tfim_g0_1p5_D12.npy`: the converted left-canonical
+  VUMPS ground-state tensor at physical field `g0=1.5`, with hashes and a
+  legacy-first-state protocol preflight stored beside it.
 
 It also includes the completed new D=12 trajectory under
 `data/nonintegrable_d12_trajectory/`.  The standalone checkpoint above is the
