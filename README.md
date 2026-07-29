@@ -216,8 +216,9 @@ The repository includes compact checkpoint and reference tensors:
   non-integrable D=12 trajectory, used for reproducible comparisons;
 - `nonintegrable_d10_t3p235.npy`: the last valid D=10 tensor immediately before
   a warm-start plateau, used to exercise fixed-target rescue.
-- `integrable_tfim_reference/tfim_g0_1p5_D12.npy` and
-  `tfim_g0_1p5_D21.npy`: left-canonical VUMPS ground-state tensors at physical
+- `integrable_tfim_reference/tfim_g0_1p5_D12.npy`,
+  `tfim_g0_1p5_D21.npy`, `tfim_g0_1p5_D36.npy`, and
+  `tfim_g0_1p5_D42.npy`: left-canonical VUMPS ground-state tensors at physical
   field `g0=1.5`, with hashes, diagnostics, and provenance stored beside them.
 
 It also includes the completed new D=12 trajectory under

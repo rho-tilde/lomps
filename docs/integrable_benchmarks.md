@@ -52,11 +52,15 @@ The committed inputs are:
 ```text
 data/integrable_tfim_reference/tfim_g0_1p5_D12.npy
 data/integrable_tfim_reference/tfim_g0_1p5_D21.npy
+data/integrable_tfim_reference/tfim_g0_1p5_D36.npy
+data/integrable_tfim_reference/tfim_g0_1p5_D42.npy
 ```
 
-Both are left-canonical VUMPS ground states of `H0` in native
-`(physical,left,right)` order. Use D=12 for `L=4,D=12` and D=21 for
-`L=5,D=21`; no lift is required in either case.
+All are left-canonical VUMPS ground states of `H0` in native
+`(physical,left,right)` order. Use D=12 for `L=4,D=12`, D=21 for
+`L=5,D=21`, and the D=36 or D=42 files for matching higher-D runs. The initial
+tensor does not impose a block length; set `--block-length` independently.
+No lift is required when `--bond-dimension` matches the tensor filename.
 
 The D=12 tensor was produced with the public converter:
 
@@ -73,11 +77,23 @@ containing source/output SHA-256 hashes and left-canonical residuals. `lomps-run
 can also read keyed archives directly through `--initial-key` and
 `--initial-layout`, but the converted input is preferred for production.
 
-The D=21 tensor was generated directly with uniform-MPS VUMPS at physical
-`g0_phys=+1.5`, then converted through the same layout-validation path. Its
-JSON sidecar additionally records VUMPS convergence, exact thermodynamic-limit
-energy and magnetization checks, transfer diagnostics, and the `L=5,D=21`
-smoke-test results.
+The D=21, D=36, and D=42 tensors were generated directly with uniform-MPS
+VUMPS at physical `g0_phys=+1.5`, then converted through the same
+layout-validation path. Their JSON sidecars additionally record VUMPS
+convergence, exact thermodynamic-limit energy and magnetization checks,
+transfer diagnostics, and evolution-target smoke tests.
+
+To adapt a production command to one of the larger references, change these
+three arguments together:
+
+```text
+--initial-A data/integrable_tfim_reference/tfim_g0_1p5_D36.npy
+--bond-dimension 36
+--output-dir runs/integrable_tfim_<chosen-L>_d36
+```
+
+or replace both occurrences of `36` by `42`. Choose `--block-length`
+separately. The Hamiltonian arguments do not change.
 
 ## Static preflight
 

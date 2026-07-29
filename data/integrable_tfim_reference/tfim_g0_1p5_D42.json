@@ -1,0 +1,67 @@
+{
+  "format": "LOMPS tensor conversion v1",
+  "tensor_convention": "(physical, left, right)",
+  "input": {
+    "source_path": "generated VUMPS archive tfim_AL_D42_g1.5.npz (not committed)",
+    "source_sha256": "cfbcae0d20865ed0f3154b1aac76ecb268acdead8a445a17b06a647d06360c6c",
+    "archive_key": "A",
+    "requested_layout": "legacy-left-physical-right",
+    "detected_layout": "legacy-left-physical-right",
+    "source_shape": [
+      42,
+      2,
+      42
+    ],
+    "output_shape": [
+      2,
+      42,
+      42
+    ]
+  },
+  "generation": {
+    "method": "uniform-MPS VUMPS",
+    "physical_hamiltonian": "H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j",
+    "physical_field_g0": 1.5,
+    "bond_dimension": 42,
+    "random_seed": 20260742,
+    "tolerance": 1e-14,
+    "maximum_iterations": 10000,
+    "convergence_residual": 9.715520961212073e-15,
+    "julia_version": "1.12.0",
+    "packages": {
+      "MPSKit": "0.13.9",
+      "MPSKitModels": "0.4.5",
+      "TensorKit": "0.16.2"
+    }
+  },
+  "output_path": "data/integrable_tfim_reference/tfim_g0_1p5_D42.npy",
+  "output_sha256": "d5cef18b28ebdcb24f50b8bf5254f13dfd75f82b1491e6384d88fe1076cde4d9",
+  "dtype": "complex128",
+  "canonical_diagnostics": {
+    "stiefel_error": 7.467484030914032e-15,
+    "left_canonical_error": 7.51376724184521e-15
+  },
+  "ground_state_diagnostics": {
+    "energy_density": -1.6719262215361932,
+    "exact_energy_density": -1.6719262215361945,
+    "sigma_x": 0.8773282152447535,
+    "exact_sigma_x": 0.8773282152447545,
+    "sigma_z": -6.772360450213455e-15,
+    "right_fixed_point_residual": 1.4347460150577072e-15,
+    "right_fixed_point_minimum_eigenvalue": -5.876327037693571e-17,
+    "transfer_gap": 0.3369694851911802,
+    "unique_unit_transfer_eigenvalue": true
+  },
+  "reference_comparison": {
+    "reference_tensor": "tfim_g0_1p5_D21.npy",
+    "maximum_trace_distance_for_blocks_l1_to_l5": 1.78465580862457e-12
+  },
+  "integrable_target_contraction_smoke_test": {
+    "block_length": 4,
+    "delta_t": 0.001,
+    "maximum_absolute_difference_vs_dense_oracle": 1.1102230246251565e-16,
+    "frobenius_difference_vs_dense_oracle": 1.8683851223287966e-16,
+    "trace_error": 0.0,
+    "hermiticity_error": 0.0
+  }
+}

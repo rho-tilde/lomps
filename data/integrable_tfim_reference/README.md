@@ -2,8 +2,10 @@
 
 The committed tensors
 
-- `tfim_g0_1p5_D12.npy`, with shape `(2, 12, 12)`, and
+- `tfim_g0_1p5_D12.npy`, with shape `(2, 12, 12)`,
 - `tfim_g0_1p5_D21.npy`, with shape `(2, 21, 21)`,
+- `tfim_g0_1p5_D36.npy`, with shape `(2, 36, 36)`, and
+- `tfim_g0_1p5_D42.npy`, with shape `(2, 42, 42)`,
 
 are left-canonical uniform-MPS approximations to the VUMPS ground state of
 
@@ -11,19 +13,20 @@ are left-canonical uniform-MPS approximations to the VUMPS ground state of
 H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j.
 ```
 
-Both use native LOMPS order `(physical, left, right)`. The D=12 tensor was
+All use native LOMPS order `(physical, left, right)`. The D=12 tensor was
 converted from the historical QDMT archive
 `data/ground_state/tfim_AL_D12_g1.5.npz`, key `A`, whose shape was
 `(left, physical, right) = (12, 2, 12)`. The adjacent JSON file records both
 file hashes and the conversion diagnostics.
 
-The D=21 tensor was generated independently with uniform-MPS VUMPS at the same
-physical field `g0=+1.5`. Its JSON sidecar records the seed, package versions,
-VUMPS convergence, hashes, canonical diagnostics, exact ground-state checks,
-and a strict three-step `L=5,D=21` LOMPS smoke test.
+The D=21, D=36, and D=42 tensors were generated independently with uniform-MPS
+VUMPS at the same physical field `g0=+1.5`. Their JSON sidecars record the
+seed, package versions, VUMPS convergence, hashes, canonical diagnostics,
+exact ground-state checks, and evolution-target smoke tests. The D=21 sidecar
+also records a strict three-step `L=5,D=21` optimizer run.
 
-The benchmark quench evolves either state with the `integrable-tfim` preset,
-which represents the physical post-quench Hamiltonian
+The benchmark quench evolves any of these states with the `integrable-tfim`
+preset, which represents the physical post-quench Hamiltonian
 
 ```text
 H1 = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j.
