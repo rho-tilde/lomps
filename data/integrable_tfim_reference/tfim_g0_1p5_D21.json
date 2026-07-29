@@ -1,0 +1,64 @@
+{
+  "format": "LOMPS tensor conversion v1",
+  "tensor_convention": "(physical, left, right)",
+  "input": {
+    "source_path": "generated VUMPS archive tfim_AL_D21_g1.5.npz (not committed)",
+    "source_sha256": "5975c03835f8ea879e2c69287c6159fc9d4abb0666824200525ad085967960e2",
+    "archive_key": "A",
+    "requested_layout": "legacy-left-physical-right",
+    "detected_layout": "legacy-left-physical-right",
+    "source_shape": [
+      21,
+      2,
+      21
+    ],
+    "output_shape": [
+      2,
+      21,
+      21
+    ]
+  },
+  "generation": {
+    "method": "uniform-MPS VUMPS",
+    "physical_hamiltonian": "H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j",
+    "physical_field_g0": 1.5,
+    "bond_dimension": 21,
+    "random_seed": 20260729,
+    "tolerance": 1e-14,
+    "maximum_iterations": 10000,
+    "converged_iteration": 17,
+    "convergence_residual": 9.619688209242094e-15,
+    "julia_version": "1.12.0",
+    "packages": {
+      "MPSKit": "0.13.9",
+      "MPSKitModels": "0.4.5",
+      "TensorKit": "0.16.2"
+    }
+  },
+  "output_path": "data/integrable_tfim_reference/tfim_g0_1p5_D21.npy",
+  "output_sha256": "96c31b17fba0272072001bc0e629281fa44d58e8ba1b626fa2e702bfa90fd8c2",
+  "dtype": "complex128",
+  "canonical_diagnostics": {
+    "stiefel_error": 4.6524289301982115e-15,
+    "left_canonical_error": 4.57928532533056e-15
+  },
+  "ground_state_diagnostics": {
+    "energy_density": -1.671926221536195,
+    "exact_energy_density": -1.6719262215361945,
+    "sigma_x": 0.877328215244755,
+    "exact_sigma_x": 0.8773282152447545,
+    "sigma_z": 1.5543122344752192e-15,
+    "right_fixed_point_residual": 8.729270987595666e-16,
+    "transfer_gap": 0.33946594676479613,
+    "unique_unit_transfer_eigenvalue": true
+  },
+  "l5_d21_smoke_test": {
+    "steps": 3,
+    "delta_t": 0.001,
+    "maximum_accepted_cost": 1.3756654313824287e-16,
+    "restarts": 0,
+    "sigma_x_max_abs_error_vs_free_fermion": 4.107740592118603e-09,
+    "local_hs_rate_max_abs_error_vs_free_fermion": 1.7007498187560088e-09,
+    "maximum_energy_drift": 2.0387862509352317e-09
+  }
+}

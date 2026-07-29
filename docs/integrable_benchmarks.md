@@ -1,21 +1,43 @@
 # Integrable TFIM benchmark runbook
 
-## Physics and code convention
+## Physical quench and the two meanings of `g`
 
-The reference quench starts from the D=12 VUMPS ground state at physical
-field `g0=1.5` and evolves with
-
-```text
-H = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j.
-```
-
-Select it with `--protocol integrable-tfim`. The preset deliberately stores
-`g=-0.2`, `h=0`, and `J=-1`: its two-site gate follows the historical QDMT
-bond convention
+The reference quench is
 
 ```text
-H_bond = J ZZ + g (X tensor I) + h (Z tensor I).
+H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j
+             |
+             | quench at t=0
+             v
+H1 = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j.
 ```
+
+In the usual physical notation,
+
+```text
+H(g_phys) = -sum_j Z_j Z_(j+1) - g_phys sum_j X_j,
+```
+
+so this is `g0_phys=+1.5 -> g1_phys=+0.2`.
+
+The argument named `--g` in `lomps-run` is not `g_phys`. It is the signed
+coefficient `g_cli` in the historical QDMT bond Hamiltonian
+
+```text
+H_bond = J ZZ + g_cli (X tensor I) + h (Z tensor I).
+```
+
+Consequently,
+
+```text
+J=-1, h=0, g_cli=-g1_phys=-0.2.
+```
+
+Use `--protocol integrable-tfim` and normally omit `--g`; the preset already
+contains `g_cli=-0.2`. If the field must be overridden explicitly, the correct
+spelling is `--g=-0.2`. Passing `--g=+0.2` evolves with the wrong physical
+field sign. The initial value `g0_phys=+1.5` is not a `lomps-run` argument:
+it was used to generate the initial ground-state tensor.
 
 The field is asymmetric inside one bond gate, and the complete second-order
 even-half / odd-full / even-half circuit restores the intended bulk field.
@@ -23,11 +45,20 @@ Do not change to `--symmetric-transverse` when reproducing the historical
 benchmark. The named preset and all resolved values are saved in
 `metadata.json`.
 
-## Reference tensor and conversion
+## Reference tensors and conversion
 
-The committed input is
-`data/integrable_tfim_reference/tfim_g0_1p5_D12.npy`. It was produced with the
-same public converter available to users:
+The committed inputs are:
+
+```text
+data/integrable_tfim_reference/tfim_g0_1p5_D12.npy
+data/integrable_tfim_reference/tfim_g0_1p5_D21.npy
+```
+
+Both are left-canonical VUMPS ground states of `H0` in native
+`(physical,left,right)` order. Use D=12 for `L=4,D=12` and D=21 for
+`L=5,D=21`; no lift is required in either case.
+
+The D=12 tensor was produced with the public converter:
 
 ```bash
 lomps-convert-tensor \
@@ -41,6 +72,12 @@ The converter writes native `(physical,left,right)` order and a JSON sidecar
 containing source/output SHA-256 hashes and left-canonical residuals. `lomps-run`
 can also read keyed archives directly through `--initial-key` and
 `--initial-layout`, but the converted input is preferred for production.
+
+The D=21 tensor was generated directly with uniform-MPS VUMPS at physical
+`g0_phys=+1.5`, then converted through the same layout-validation path. Its
+JSON sidecar additionally records VUMPS convergence, exact thermodynamic-limit
+energy and magnetization checks, transfer diagnostics, and the `L=5,D=21`
+smoke-test results.
 
 ## Static preflight
 
@@ -64,7 +101,9 @@ second-order splittings at the accuracy of the old optimizer. LOMPS uses the
 asymmetric preset because that is the historical production convention pinned
 down from the old implementation; the new run records this choice explicitly.
 
-## Production command
+## Production commands
+
+### L=4, D=12
 
 ```bash
 lomps-run \
@@ -89,12 +128,39 @@ lomps-run \
   --base-time 0
 ```
 
+### L=5, D=21
+
+```bash
+lomps-run \
+  --protocol integrable-tfim \
+  --initial-A data/integrable_tfim_reference/tfim_g0_1p5_D21.npy \
+  --initial-layout physical-left-right \
+  --output-dir runs/integrable_tfim_l5_d21 \
+  --bond-dimension 21 \
+  --block-length 5 \
+  --delta-t 1e-3 \
+  --no-symmetric-transverse \
+  --fixed-point-solver dense \
+  --target-source-fixed-point-solver dense \
+  --target-contraction tensor \
+  --accept-cost 1e-15 \
+  --perturb-amplitudes 0.1,0.3,0.6,1.0 \
+  --perturbations-per-amplitude 3 \
+  --random-restarts 0 \
+  --no-strict-retry \
+  --checkpoint-every 25 \
+  --steps 20000 \
+  --base-time 0
+```
+
+Neither command needs `--g`: `--protocol integrable-tfim` resolves it to
+`-0.2`. Adding `--g=-0.2` is equivalent but redundant.
+
 This saves 20,001 aligned samples including the initial state at `t=0` and the
-final state at `t=20`. Since source and trajectory both have D=12, the first
+final state at `t=20`. Since source and trajectory dimensions match, the first
 step uses the standard LM continuation; the low-D product-state CG launch is
-not involved. Pause only between completed timesteps by creating
-`runs/integrable_tfim_l4_d12/PAUSE`; remove it and repeat the command with
-`--resume`.
+not involved. Pause only between completed timesteps by creating `PAUSE` in
+the selected run directory; remove it and repeat the command with `--resume`.
 
 For a short cluster smoke test, change only `--steps` and the output directory.
 Use a new directory for the full run because resume intentionally rejects a

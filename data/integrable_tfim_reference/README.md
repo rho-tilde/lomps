@@ -1,27 +1,48 @@
-# Integrable TFIM D=12 initial state
+# Integrable TFIM initial states
 
-`tfim_g0_1p5_D12.npy` is the left-canonical uniform-MPS tensor for the VUMPS
-ground state of
+The committed tensors
+
+- `tfim_g0_1p5_D12.npy`, with shape `(2, 12, 12)`, and
+- `tfim_g0_1p5_D21.npy`, with shape `(2, 21, 21)`,
+
+are left-canonical uniform-MPS approximations to the VUMPS ground state of
 
 ```text
-H(g0) = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j.
+H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j.
 ```
 
-It has native LOMPS shape `(physical, left, right) = (2, 12, 12)`. The tensor
-was converted from the historical QDMT archive
+Both use native LOMPS order `(physical, left, right)`. The D=12 tensor was
+converted from the historical QDMT archive
 `data/ground_state/tfim_AL_D12_g1.5.npz`, key `A`, whose shape was
 `(left, physical, right) = (12, 2, 12)`. The adjacent JSON file records both
 file hashes and the conversion diagnostics.
 
-The benchmark quench evolves this state with the `integrable-tfim` preset,
+The D=21 tensor was generated independently with uniform-MPS VUMPS at the same
+physical field `g0=+1.5`. Its JSON sidecar records the seed, package versions,
+VUMPS convergence, hashes, canonical diagnostics, exact ground-state checks,
+and a strict three-step `L=5,D=21` LOMPS smoke test.
+
+The benchmark quench evolves either state with the `integrable-tfim` preset,
 which represents the physical post-quench Hamiltonian
 
 ```text
-H(g1) = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j.
+H1 = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j.
 ```
 
-The preset coefficient is `g=-0.2` because LOMPS reproduces the historical
-asymmetric bond convention `H_bond = J ZZ + g (X tensor I) + h (Z tensor I)`.
+There are two different quantities called `g` in the surrounding code and
+literature:
+
+```text
+physical notation:       H(g_phys) = -sum(ZZ) - g_phys sum(X)
+LOMPS CLI coefficient:   H_bond    = J ZZ + g_cli (X tensor I) + h (Z tensor I)
+```
+
+Therefore `g_phys=+0.2` means `g_cli=-0.2`. The safest production command is
+to pass `--protocol integrable-tfim` and omit `--g`; the preset already stores
+the correct value. If an explicit override is necessary, pass `--g=-0.2`,
+never `--g=+0.2`. The initial field `g0=+1.5` is already encoded in the
+ground-state tensor and is not passed to `lomps-run`.
+
 See `docs/integrable_benchmarks.md` before comparing to a legacy archive.
 
 `legacy_first_state_preflight.json` records a static comparison with the first

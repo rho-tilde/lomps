@@ -56,8 +56,8 @@ lomps-run \
 Create `runs/d10/PAUSE` to pause between timesteps. Remove it and append
 `--resume` to the same command to continue.
 
-Run the integrable TFIM reference quench with the committed VUMPS ground-state
-tensor:
+Run the `L=4,D=12` integrable TFIM reference quench with the committed VUMPS
+ground-state tensor:
 
 ```bash
 lomps-run \
@@ -72,6 +72,15 @@ lomps-run \
   --steps 20000 \
   --base-time 0
 ```
+
+For `L=5,D=21`, use
+`data/integrable_tfim_reference/tfim_g0_1p5_D21.npy`, set
+`--bond-dimension 21 --block-length 5`, and choose a new output directory.
+The physical quench is
+`H0=-sum(ZZ)-1.5*sum(X)` to `H1=-sum(ZZ)-0.2*sum(X)`. The preset internally
+uses `g=-0.2` because CLI `--g` is the signed coefficient of `X tensor I`, not
+the positive physical field magnitude. Prefer omitting `--g` when using the
+preset; an explicit override must be written `--g=-0.2`.
 
 See [docs/integrable_benchmarks.md](docs/integrable_benchmarks.md) for the
 Hamiltonian sign convention, production restart settings, static legacy-data
@@ -201,15 +210,15 @@ for the reference parameters.
 
 ## Reference data
 
-The repository includes two compact checkpoint tensors:
+The repository includes compact checkpoint and reference tensors:
 
 - `nonintegrable_d12_t0p001.npy`: the first saved tensor of the historical
   non-integrable D=12 trajectory, used for reproducible comparisons;
 - `nonintegrable_d10_t3p235.npy`: the last valid D=10 tensor immediately before
   a warm-start plateau, used to exercise fixed-target rescue.
-- `integrable_tfim_reference/tfim_g0_1p5_D12.npy`: the converted left-canonical
-  VUMPS ground-state tensor at physical field `g0=1.5`, with hashes and a
-  legacy-first-state protocol preflight stored beside it.
+- `integrable_tfim_reference/tfim_g0_1p5_D12.npy` and
+  `tfim_g0_1p5_D21.npy`: left-canonical VUMPS ground-state tensors at physical
+  field `g0=1.5`, with hashes, diagnostics, and provenance stored beside them.
 
 It also includes the completed new D=12 trajectory under
 `data/nonintegrable_d12_trajectory/`.  The standalone checkpoint above is the
