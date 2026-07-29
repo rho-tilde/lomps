@@ -21,6 +21,13 @@ from lomps.rdm import block_rdm
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "data" / "integrable_tfim_reference" / "tfim_g0_1p5_D12.npy"
+FREE_FERMION_REFERENCE = (
+    ROOT
+    / "data"
+    / "integrable_tfim_reference"
+    / "free_fermion_g0_1p5_g1_0p2_t0_t20.npz"
+)
+FREE_FERMION_METADATA = FREE_FERMION_REFERENCE.with_suffix(".json")
 
 
 class IntegrableBenchmarkTests(unittest.TestCase):
@@ -90,6 +97,48 @@ class IntegrableBenchmarkTests(unittest.TestCase):
         rho4 = block_rdm(A, 4, r)
         vumps_rate = -np.log(float(np.trace(rho4 @ rho4).real)) / 4
         self.assertLess(abs(vumps_rate - scalar), 2e-9)
+
+    def test_committed_free_fermion_reference_is_reproducible(self) -> None:
+        with np.load(FREE_FERMION_REFERENCE) as reference:
+            times = np.asarray(reference["times"])
+            sample_indices = np.array(
+                [0, 1, 100, 859, 2000, 5000, 10000, 20000]
+            )
+            sampled_times = times[sample_indices]
+            np.testing.assert_allclose(
+                reference["sigma_x"][sample_indices],
+                exact_transverse_magnetization(sampled_times),
+                rtol=0.0,
+                atol=2e-14,
+            )
+            np.testing.assert_allclose(
+                reference["local_hs_rate"][sample_indices],
+                exact_local_hs_rate(sampled_times, 4, ring_sites=128),
+                rtol=0.0,
+                atol=2e-14,
+            )
+            np.testing.assert_allclose(reference["sigma_y"], 0.0, atol=0.0)
+            np.testing.assert_allclose(reference["sigma_z"], 0.0, atol=0.0)
+            np.testing.assert_allclose(
+                reference["local_hs_overlap"],
+                np.exp(-4.0 * reference["local_hs_rate"]),
+                rtol=2e-15,
+                atol=0.0,
+            )
+            self.assertEqual(len(times), 20001)
+            self.assertEqual(times[0], 0.0)
+            self.assertEqual(times[-1], 20.0)
+
+        metadata = json.loads(FREE_FERMION_METADATA.read_text())
+        self.assertEqual(metadata["parameters"]["g0"], 1.5)
+        self.assertEqual(metadata["parameters"]["g1"], 0.2)
+        self.assertEqual(metadata["parameters"]["patch_size"], 4)
+        self.assertLess(
+            metadata["finite_ring_check"][
+                "maximum_absolute_local_hs_rate_difference"
+            ],
+            5e-12,
+        )
 
     def test_three_step_strict_cli_matches_local_free_fermion_curve(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

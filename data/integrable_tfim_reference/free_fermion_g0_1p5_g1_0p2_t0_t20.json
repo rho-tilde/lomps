@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "description": "Independent free-fermion reference for the integrable TFIM quench.",
+  "initial_hamiltonian": "H0 = -sum_j Z_j Z_(j+1) - 1.5 sum_j X_j",
+  "evolution_hamiltonian": "H1 = -sum_j Z_j Z_(j+1) - 0.2 sum_j X_j",
+  "parameters": {
+    "g0": 1.5,
+    "g1": 0.2,
+    "final_time": 20.0,
+    "delta_t": 0.001,
+    "patch_size": 4,
+    "ring_sites": 128,
+    "quadrature_points": 2048
+  },
+  "arrays": {
+    "times": "Inclusive uniform time grid.",
+    "sigma_x": "Exact thermodynamic-limit transverse magnetization.",
+    "sigma_y": "Exactly zero by the Ising parity symmetry of this quench.",
+    "sigma_z": "Exactly zero by the Ising parity symmetry of this quench.",
+    "local_hs_rate": "-log(Tr[rho_L(t) rho_L(0)]) / L for the configured patch.",
+    "local_hs_overlap": "Tr[rho_L(t) rho_L(0)]."
+  },
+  "finite_ring_check": {
+    "comparison_ring_sites": 192,
+    "sampled_times": 41,
+    "maximum_absolute_local_hs_rate_difference": 1.9984014443252818e-15
+  },
+  "implementation": {
+    "generator_script": "examples/generate_free_fermion_reference.py",
+    "free_fermion_module": "src/lomps/integrable.py",
+    "generator_script_sha256": "b710ab735a0015adacb11098a7bc07c1c4c870fe0ec4d8faf3f0e29c9d6c0ea3",
+    "free_fermion_module_sha256": "44fb356cf054730c79ac06606af2e69e0866bf091afae1217fae467441f9ba2c"
+  },
+  "npz_sha256": "458333970f1a7b57a3489252d1c4817b0481be03368c05a631bf010fb40ea351"
+}

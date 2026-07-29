@@ -103,7 +103,7 @@ different requested trajectory length.
 The same production path is exercised by a three-step regression test:
 
 ```bash
-python -m unittest tests.test_integrable
+python -m unittest discover -s tests -p 'test_integrable.py'
 ```
 
 Besides the tensor and contraction checks, this launches `lomps-run` through
@@ -111,6 +111,50 @@ its Python module entry point with the strict settings above. It requires all
 three costs to be at most `1e-15`, requires zero restarts, and compares the
 saved four-site local Loschmidt signature with the independent free-fermion
 result. No test data are written into the repository.
+
+## Learning and regenerating the free-fermion reference
+
+The exact comparison is not an old LOMPS trajectory. It follows from the
+Jordan-Wigner solution of
+
+```text
+H(g) = -sum_j Z_j Z_(j+1) - g sum_j X_j.
+```
+
+After mapping spins to Majoranas, the Hamiltonian has the quadratic form
+`H=(i/4) w.T A w`. Its ground state is specified by a covariance matrix
+`Gamma`, and time evolution under the post-quench generator is
+
+```text
+Gamma(t) = exp(A1 t) Gamma(0) exp(A1 t).T.
+```
+
+Restricting this covariance to the `2L` Majoranas in a block gives the local
+Hilbert--Schmidt overlap directly:
+
+```text
+Tr[rho_L(t) rho_L(0)]
+    = 2^(-L) sqrt(det(I - Gamma_L(t) Gamma_L(0))).
+```
+
+The implementation is deliberately kept in two readable layers:
+
+- `src/lomps/integrable.py` contains the free-fermion mathematics.
+- `examples/generate_free_fermion_reference.py` chooses the quench and grid,
+  checks finite-ring convergence, and writes the data and plot.
+
+Run:
+
+```bash
+python examples/generate_free_fermion_reference.py
+```
+
+This reproduces
+`data/integrable_tfim_reference/free_fermion_g0_1p5_g1_0p2_t0_t20.npz`
+and `docs/figures/integrable_tfim_free_fermion_reference.png`. The NPZ contains
+the exact transverse magnetization and four-site local Loschmidt signature at
+every LOMPS production time. It is therefore a compact, optimizer-independent
+golden reference for cluster runs.
 
 ## Result audit
 

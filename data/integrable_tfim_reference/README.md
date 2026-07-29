@@ -32,3 +32,32 @@ target. The asymmetric and symmetric negative-field splittings differ in this
 test by only `1.8e-19` in cost, below what that old fit can resolve; the report
 therefore validates the quench Hamiltonian but not the historical gate split
 by itself.
+
+## Independent free-fermion reference
+
+`free_fermion_g0_1p5_g1_0p2_t0_t20.npz` is independent of both the LOMPS
+optimizer and its Trotter circuit. It contains exact free-fermion values on the
+same `dt=1e-3` grid from `t=0` through `t=20`:
+
+```text
+times
+sigma_x
+sigma_y
+sigma_z
+local_hs_rate
+local_hs_overlap
+```
+
+The local quantities use a four-site patch. The nominally vanishing
+magnetizations are included so a trajectory audit can compare every Pauli
+component without special cases. The adjacent JSON file records the precise
+parameters, formulas, file hashes, and the finite-ring convergence check.
+
+Regenerate the data and its overview plot from the repository root with:
+
+```bash
+python examples/generate_free_fermion_reference.py
+```
+
+The script is intended to be readable. The underlying Jordan-Wigner/Majorana
+construction is in `src/lomps/integrable.py`.

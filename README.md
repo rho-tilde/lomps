@@ -77,6 +77,16 @@ See [docs/integrable_benchmarks.md](docs/integrable_benchmarks.md) for the
 Hamiltonian sign convention, production restart settings, static legacy-data
 preflight, exact-solution audit, and resume procedure.
 
+Generate the independent free-fermion reference data and overview plot with:
+
+```bash
+python examples/generate_free_fermion_reference.py
+```
+
+The script includes a short Majorana-covariance derivation and a finite-ring
+convergence check. The generated NPZ provides exact `<X>(t)` and four-site
+local Loschmidt values on the full production time grid.
+
 ## Conventions
 
 Tensors have shape `(physical, left, right)` and are left canonical:
