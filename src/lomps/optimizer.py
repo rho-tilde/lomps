@@ -35,6 +35,8 @@ from .transfer import (
 Array = np.ndarray
 FixedPointSolver = Literal["dense", "fast"]
 LMLinearSolver = Literal["svd", "normal"]
+_JACOBIAN_BATCH_WORKING_BYTES = 64 * 1024**2
+_JACOBIAN_GEMM_OUTPUT_BYTES = 32 * 1024**2
 
 
 @dataclass(frozen=True)
@@ -175,6 +177,32 @@ def grassmann_project(W: Array, X: Array) -> Array:
     return X - W @ (W.conj().T @ X)
 
 
+def _jacobian_tangent_batch_size(count: int, sequence_count: int, D: int) -> int:
+    """Choose a tangent batch that bounds Jacobian contraction temporaries."""
+
+    complex_bytes = np.dtype(np.complex128).itemsize
+    per_tangent = complex_bytes * (
+        2 * sequence_count * D * D + 4 * sequence_count * sequence_count
+    )
+    return min(count, max(1, _JACOBIAN_BATCH_WORKING_BYTES // per_tangent))
+
+
+def _jacobian_output_column_batch_size(
+    count: int, sequence_count: int, D: int
+) -> int:
+    """Bound both operands produced by the fixed-point derivative GEMM."""
+
+    bytes_per_column = (
+        np.dtype(np.complex128).itemsize
+        * sequence_count
+        * max(count, D * D)
+    )
+    return min(
+        sequence_count,
+        max(1, _JACOBIAN_GEMM_OUTPUT_BYTES // bytes_per_column),
+    )
+
+
 def batched_rdm_jacobian(
     A: Array,
     tangent_tensors: list[Array],
@@ -217,52 +245,97 @@ def batched_rdm_jacobian(
         value = 0.5 * (value + value.conj().T)
         delta_r[index] = value - identity * (np.trace(value) / D)
 
-    products = np.eye(D, dtype=np.complex128)[None, :, :]
-    delta_products = np.zeros((count, 1, D, D), dtype=np.complex128)
+    product_levels = [np.eye(D, dtype=np.complex128)[None, :, :]]
     for _ in range(block_length):
+        products = product_levels[-1]
         next_products = np.empty(
             (products.shape[0] * d, D, D), dtype=np.complex128
         )
-        next_delta = np.empty(
-            (count, products.shape[0] * d, D, D), dtype=np.complex128
-        )
         out = 0
-        for sequence, product in enumerate(products):
+        for product in products:
             for physical in range(d):
                 next_products[out] = product @ A[physical]
-                next_delta[:, out] = (
-                    delta_products[:, sequence] @ A[physical]
-                    + product @ tangents[:, physical]
-                )
                 out += 1
-        products = next_products
-        delta_products = next_delta
+        product_levels.append(next_products)
 
-    ket = np.einsum(
-        "psab,bc,tac->pst",
-        delta_products,
-        r,
-        products.conj(),
-        optimize=True,
+    products = product_levels[-1]
+    sequence_count = products.shape[0]
+    delta_r_flat = np.ascontiguousarray(delta_r.reshape(count, D * D))
+    matrix_entries = sequence_count * sequence_count
+    jacobian = np.empty((2 * matrix_entries, count), dtype=float)
+    output_batch_size = _jacobian_output_column_batch_size(
+        count, sequence_count, D
     )
-    fixed = np.einsum(
-        "sab,pbc,tac->pst",
-        products,
-        delta_r,
-        products.conj(),
-        optimize=True,
-    )
-    bra = np.einsum(
-        "sab,bc,ptac->pst",
-        products,
-        r,
-        delta_products.conj(),
-        optimize=True,
-    )
-    derivatives = ket + fixed + bra
-    return np.column_stack(
-        [real_vectorize_rho(derivatives[index]) for index in range(count)]
-    )
+    for column_start in range(0, sequence_count, output_batch_size):
+        column_stop = min(column_start + output_batch_size, sequence_count)
+        fixed_environment = np.einsum(
+            "sab,tac->bcst",
+            products,
+            products[column_start:column_stop].conj(),
+            optimize=True,
+        )
+        fixed_environment = np.ascontiguousarray(
+            fixed_environment.reshape(D * D, -1)
+        )
+        fixed_values = (
+            delta_r_flat @ fixed_environment
+        ).reshape(count, sequence_count, column_stop - column_start)
+        fixed_columns = fixed_values.transpose(0, 2, 1).reshape(count, -1)
+        row_start = sequence_count * column_start
+        row_stop = sequence_count * column_stop
+        jacobian[row_start:row_stop] = fixed_columns.real.T
+        jacobian[matrix_entries + row_start : matrix_entries + row_stop] = (
+            fixed_columns.imag.T
+        )
+
+    batch_size = _jacobian_tangent_batch_size(count, sequence_count, D)
+
+    for start in range(0, count, batch_size):
+        stop = min(start + batch_size, count)
+        tangent_batch = tangents[start:stop]
+        batch_count = stop - start
+        delta_products = np.zeros(
+            (batch_count, 1, D, D), dtype=np.complex128
+        )
+        for level in range(block_length):
+            level_products = product_levels[level]
+            next_delta = np.empty(
+                (batch_count, level_products.shape[0] * d, D, D),
+                dtype=np.complex128,
+            )
+            out = 0
+            for sequence, product in enumerate(level_products):
+                for physical in range(d):
+                    next_delta[:, out] = (
+                        delta_products[:, sequence] @ A[physical]
+                        + product @ tangent_batch[:, physical]
+                    )
+                    out += 1
+            delta_products = next_delta
+
+        derivatives = np.einsum(
+            "psab,bc,tac->pst",
+            delta_products,
+            r,
+            products.conj(),
+            optimize=True,
+        )
+        derivatives += np.einsum(
+            "sab,bc,ptac->pst",
+            products,
+            r,
+            delta_products.conj(),
+            optimize=True,
+        )
+        real_columns = derivatives.real.transpose(0, 2, 1).reshape(
+            batch_count, matrix_entries
+        )
+        imaginary_columns = derivatives.imag.transpose(0, 2, 1).reshape(
+            batch_count, matrix_entries
+        )
+        jacobian[:matrix_entries, start:stop] += real_columns.T
+        jacobian[matrix_entries:, start:stop] += imaginary_columns.T
+    return jacobian
 
 
 def fast_right_fixed_point(A: Array) -> tuple[Array, dict[str, float | complex]]:

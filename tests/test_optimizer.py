@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 import numpy as np
@@ -167,6 +170,45 @@ class OptimizerTests(unittest.TestCase):
         expected, _ = build_jacobian(A, basis_A, 3, r=r)
         actual = batched_rdm_jacobian(A, basis_A, 3, r)
         np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=1e-10)
+
+    def test_d23_l6_jacobian_avoids_oversized_complex_gemm(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = """
+import numpy as np
+from lomps.canonical import random_left_canonical
+from lomps.optimizer import batched_rdm_jacobian
+
+A, _ = random_left_canonical(2, 23, seed=8123)
+tangents = np.zeros((1058, 2, 23, 23), dtype=np.complex128)
+r = np.eye(23, dtype=np.complex128) / 23
+jacobian = batched_rdm_jacobian(A, tangents, 6, r)
+assert jacobian.shape == (8192, 1058)
+assert np.count_nonzero(jacobian) == 0
+"""
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "VECLIB_MAXIMUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
+            }
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", script],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
 
     def test_zero_time_step_target_is_current_rdm(self) -> None:
         A, _ = random_left_canonical(d=2, D=2, seed=74)

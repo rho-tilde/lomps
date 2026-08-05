@@ -74,6 +74,13 @@ def parse_args() -> argparse.Namespace:
         help="Trotter step size; defaults to the selected protocol preset.",
     )
     parser.add_argument(
+        "--trotter-order",
+        type=int,
+        choices=(2,),
+        default=None,
+        help="Trotter order; LOMPS currently supports only second order.",
+    )
+    parser.add_argument(
         "--g",
         type=float,
         default=None,
@@ -503,6 +510,11 @@ def protocol_from_args(args: argparse.Namespace):
         name=f"{name_prefix}_L{block_length}",
         block_length=block_length,
         delta_t=delta_t,
+        trotter_order=(
+            base.trotter_order
+            if getattr(args, "trotter_order", None) is None
+            else args.trotter_order
+        ),
         g=base.g if getattr(args, "g", None) is None else args.g,
         h=base.h if getattr(args, "h", None) is None else args.h,
         J=base.J if getattr(args, "J", None) is None else args.J,

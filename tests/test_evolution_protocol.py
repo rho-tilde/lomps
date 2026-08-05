@@ -32,6 +32,7 @@ def protocol_args(block_length: int = 4) -> Namespace:
         protocol="nonintegrable-ising",
         block_length=block_length,
         delta_t=NONINTEGRABLE_ISING.delta_t,
+        trotter_order=None,
         g=None,
         h=None,
         J=None,
@@ -125,6 +126,7 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertEqual(args.protocol, "nonintegrable-ising")
         self.assertIsNone(args.block_length)
         self.assertIsNone(args.delta_t)
+        self.assertIsNone(args.trotter_order)
         self.assertIsNone(args.g)
         self.assertIsNone(args.h)
         self.assertIsNone(args.J)
@@ -143,6 +145,12 @@ class EvolutionProtocolTests(unittest.TestCase):
         protocol = protocol_from_args(args)
         self.assertEqual(protocol.delta_t, 5e-4)
         self.assertEqual(protocol.block_length, NONINTEGRABLE_ISING.block_length)
+
+    def test_explicit_second_order_trotter_is_accepted(self) -> None:
+        args = protocol_args()
+        args.trotter_order = 2
+        protocol = protocol_from_args(args)
+        self.assertEqual(protocol.trotter_order, 2)
 
     def test_integrable_preset_and_hamiltonian_overrides(self) -> None:
         args = protocol_args()

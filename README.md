@@ -19,6 +19,8 @@ The core implementation provides:
   of materializing the full light-cone brickwall unitary;
 - historical-style analytic fixed-target CG for the first lifted product-state
   update, followed by an LM polish;
+- optional segmented trajectories that promote the bond dimension only after
+  the current manifold cannot accept its next update;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
 
 ## Installation
@@ -55,6 +57,16 @@ lomps-run \
 
 Create `runs/d10/PAUSE` to pause between timesteps. Remove it and append
 `--resume` to the same command to continue.
+
+For weakly entangled starts at large target bond dimension, see
+[docs/adaptive_bond_runs.md](docs/adaptive_bond_runs.md). The optional
+`lomps-run-adaptive` command runs ordinary checkpointed LOMPS segments and
+promotes through a user-supplied bond-dimension ladder only after a failed next
+update.
+
+The dense RDM Jacobian uses bounded tangent and physical-output batches. See
+[docs/large_jacobian_blas_safety.md](docs/large_jacobian_blas_safety.md) for
+the native BLAS failure this avoids and the large-`D` regression coverage.
 
 Run the `L=4,D=12` integrable TFIM reference quench with the committed VUMPS
 ground-state tensor:
