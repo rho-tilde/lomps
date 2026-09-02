@@ -9,6 +9,7 @@ damped Gauss--Newton problem there.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import time
 from typing import Literal
@@ -18,11 +19,21 @@ import scipy.linalg as la
 from scipy.sparse.linalg import ArpackNoConvergence, eigs
 
 from .canonical import polar_retraction, stack_tensor, unstack_tensor
-from .differential import real_vectorize_rho
+from .differential import (
+    hermitian_vectorize_rho,
+    pack_hermitian_real_jacobian,
+    real_vectorize_rho,
+)
 from .gauge import gauge_basis
 from .rdm import block_rdm
-from .tangent import as_real_columns, tangent_bases
+from .tangent import (
+    TangentSlice,
+    as_real_columns,
+    grassmann_tangent_basis,
+    tangent_bases,
+)
 from .transfer import (
+    DenseFixedPointResponseSolver,
     delta_channel,
     right_fixed_point,
     trace_row,
@@ -35,6 +46,8 @@ from .transfer import (
 Array = np.ndarray
 FixedPointSolver = Literal["dense", "fast"]
 LMLinearSolver = Literal["svd", "normal"]
+RDMVectorization = Literal["full", "hermitian"]
+JacobianResponseSolver = Literal["lstsq", "dense_lu"]
 _JACOBIAN_BATCH_WORKING_BYTES = 64 * 1024**2
 _JACOBIAN_GEMM_OUTPUT_BYTES = 32 * 1024**2
 
@@ -48,6 +61,7 @@ class LMOptions:
     residual_tolerance: float = 0.0
     cost_tolerance: float = 0.0
     rank_tolerance: float = 1e-10
+    tangent_slice: TangentSlice = "gauge_orthogonal"
     initial_damping: float = 1e-4
     trust_radius: float = 1.0
     armijo_c1: float = 1e-4
@@ -59,6 +73,9 @@ class LMOptions:
     maximum_seconds: float = 600.0
     fixed_point_solver: FixedPointSolver = "dense"
     linear_solver: LMLinearSolver = "svd"
+    rdm_vectorization: RDMVectorization = "full"
+    jacobian_response_solver: JacobianResponseSolver = "lstsq"
+    jacobian_workers: int = 1
     verbose: bool = True
 
 
@@ -208,6 +225,9 @@ def batched_rdm_jacobian(
     tangent_tensors: list[Array],
     block_length: int,
     r: Array,
+    *,
+    response_solver: JacobianResponseSolver = "lstsq",
+    workers: int = 1,
 ) -> Array:
     """Build the real RDM Jacobian with one shared fixed-point solve.
 
@@ -217,33 +237,48 @@ def batched_rdm_jacobian(
     The directional block products and RDM contractions are batched as well.
     """
 
+    if response_solver not in ("lstsq", "dense_lu"):
+        raise ValueError("response_solver must be 'lstsq' or 'dense_lu'")
+    if workers < 1:
+        raise ValueError("workers must be positive")
     if len(tangent_tensors) == 0:
         return np.zeros((0, 0), dtype=float)
     A = np.asarray(A, dtype=np.complex128)
     tangents = np.asarray(tangent_tensors, dtype=np.complex128)
     count, d, D, _ = tangents.shape
 
-    lhs = np.eye(D * D, dtype=np.complex128) - transfer_matrix(A)
-    augmented_lhs = np.vstack([lhs, trace_row(D)])
     right_sides = np.column_stack(
         [vec(delta_channel(A, delta_A, r)) for delta_A in tangents]
     )
-    augmented_rhs = np.vstack(
-        [right_sides, np.zeros((1, count), dtype=np.complex128)]
-    )
-    solutions, *_ = la.lstsq(
-        augmented_lhs,
-        augmented_rhs,
-        cond=None,
-        check_finite=False,
-        lapack_driver="gelsy",
-    )
+    if response_solver == "dense_lu":
+        fixed_point_response = DenseFixedPointResponseSolver.from_tensor(A, r)
+        solutions = la.lu_solve(
+            fixed_point_response.lu_and_pivots,
+            right_sides,
+            trans=0,
+            check_finite=False,
+        )
+    else:
+        lhs = np.eye(D * D, dtype=np.complex128) - transfer_matrix(A)
+        augmented_lhs = np.vstack([lhs, trace_row(D)])
+        augmented_rhs = np.vstack(
+            [right_sides, np.zeros((1, count), dtype=np.complex128)]
+        )
+        solutions, *_ = la.lstsq(
+            augmented_lhs,
+            augmented_rhs,
+            cond=None,
+            check_finite=False,
+            lapack_driver="gelsy",
+        )
     delta_r = np.empty((count, D, D), dtype=np.complex128)
-    identity = np.eye(D, dtype=np.complex128)
     for index in range(count):
         value = solutions[:, index].reshape(D, D, order="F")
         value = 0.5 * (value + value.conj().T)
-        delta_r[index] = value - identity * (np.trace(value) / D)
+        if response_solver == "dense_lu":
+            delta_r[index] = value - r * np.trace(value)
+        else:
+            delta_r[index] = value - np.eye(D) * (np.trace(value) / D)
 
     product_levels = [np.eye(D, dtype=np.complex128)[None, :, :]]
     for _ in range(block_length):
@@ -290,7 +325,7 @@ def batched_rdm_jacobian(
 
     batch_size = _jacobian_tangent_batch_size(count, sequence_count, D)
 
-    for start in range(0, count, batch_size):
+    def tangent_columns(start: int) -> tuple[int, int, Array, Array]:
         stop = min(start + batch_size, count)
         tangent_batch = tangents[start:stop]
         batch_count = stop - start
@@ -333,8 +368,21 @@ def batched_rdm_jacobian(
         imaginary_columns = derivatives.imag.transpose(0, 2, 1).reshape(
             batch_count, matrix_entries
         )
-        jacobian[:matrix_entries, start:stop] += real_columns.T
-        jacobian[matrix_entries:, start:stop] += imaginary_columns.T
+        return start, stop, real_columns, imaginary_columns
+
+    starts = range(0, count, batch_size)
+    if workers == 1:
+        column_batches = map(tangent_columns, starts)
+        for start, stop, real_columns, imaginary_columns in column_batches:
+            jacobian[:matrix_entries, start:stop] += real_columns.T
+            jacobian[matrix_entries:, start:stop] += imaginary_columns.T
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for start, stop, real_columns, imaginary_columns in executor.map(
+                tangent_columns, starts
+            ):
+                jacobian[:matrix_entries, start:stop] += real_columns.T
+                jacobian[matrix_entries:, start:stop] += imaginary_columns.T
     return jacobian
 
 
@@ -351,6 +399,7 @@ def fast_right_fixed_point(A: Array) -> tuple[Array, dict[str, float | complex]]
             which="LM",
             tol=1e-13,
             maxiter=max(1000, 10 * D * D),
+            v0=vec(np.eye(D, dtype=np.complex128) / D),
         )
         eigenvalue = values[0]
         r = unvec(vectors[:, 0], D)
@@ -404,6 +453,21 @@ class GaugeOrthogonalLM:
             raise ValueError("fixed_point_solver must be 'dense' or 'fast'")
         if self.options.linear_solver not in ("svd", "normal"):
             raise ValueError("linear_solver must be 'svd' or 'normal'")
+        if self.options.rdm_vectorization not in ("full", "hermitian"):
+            raise ValueError("rdm_vectorization must be 'full' or 'hermitian'")
+        if self.options.jacobian_response_solver not in ("lstsq", "dense_lu"):
+            raise ValueError(
+                "jacobian_response_solver must be 'lstsq' or 'dense_lu'"
+            )
+        if self.options.jacobian_workers < 1:
+            raise ValueError("jacobian_workers must be positive")
+        if self.options.tangent_slice not in (
+            "gauge_orthogonal",
+            "grassmann",
+        ):
+            raise ValueError(
+                "tangent_slice must be 'gauge_orthogonal' or 'grassmann'"
+            )
         self._cached_W: Array | None = None
         self._cached_r: Array | None = None
         self._cached_info: dict[str, float | complex] | None = None
@@ -446,15 +510,25 @@ class GaugeOrthogonalLM:
         r, _ = self._right_fixed_point_for_W(W, A)
         rho = block_rdm(A, self.block_length, r)
         residual = rho - np.asarray(rho_target, dtype=np.complex128)
-        residual_vector = real_vectorize_rho(residual)
-        basis_list = gauge_orthogonal_basis(
-            A, W, tolerance=self.options.rank_tolerance
-        )
+        residual_vector = self._vectorize_rdm(residual)
+        if self.options.tangent_slice == "grassmann":
+            basis_list = grassmann_tangent_basis(W, d, D)
+        else:
+            basis_list = gauge_orthogonal_basis(
+                A, W, tolerance=self.options.rank_tolerance
+            )
         basis = np.asarray(basis_list, dtype=np.complex128)
         tangent_tensors = basis.reshape(len(basis), d, D, D)
         jacobian = batched_rdm_jacobian(
-            A, tangent_tensors, self.block_length, r
+            A,
+            tangent_tensors,
+            self.block_length,
+            r,
+            response_solver=self.options.jacobian_response_solver,
+            workers=self.options.jacobian_workers,
         )
+        if self.options.rdm_vectorization == "hermitian":
+            jacobian = pack_hermitian_real_jacobian(jacobian, rho.shape[0])
         gradient = jacobian.T @ residual_vector
         if self.options.linear_solver == "svd":
             svd_u, singular_values, svd_vh = _safe_svd(
@@ -493,6 +567,11 @@ class GaugeOrthogonalLM:
             visible_rank=visible_rank,
             rank_tolerance=effective_tolerance,
         )
+
+    def _vectorize_rdm(self, matrix: Array) -> Array:
+        if self.options.rdm_vectorization == "hermitian":
+            return hermitian_vectorize_rho(matrix)
+        return real_vectorize_rho(matrix)
 
     def _svd_lm_direction(
         self, evaluation: LMEvaluation, damping: float
@@ -562,7 +641,7 @@ class GaugeOrthogonalLM:
             A = unstack_tensor(candidate, dD // D, D)
             r, info = self._right_fixed_point(A)
             residual = block_rdm(A, self.block_length, r) - rho_target
-            residual_vector = real_vectorize_rho(residual)
+            residual_vector = self._vectorize_rdm(residual)
             cost = 0.5 * float(np.dot(residual_vector, residual_vector))
             if np.isfinite(cost) and cost <= (
                 evaluation.cost + self.options.armijo_c1 * alpha * slope

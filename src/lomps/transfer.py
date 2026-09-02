@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.linalg as la
+from scipy.sparse.linalg import LinearOperator, gmres
 
 
 def vec(X: np.ndarray) -> np.ndarray:
@@ -160,3 +163,165 @@ def solve_delta_fixed_point(
         "hermiticity_error": float(la.norm(delta_r - delta_r.conj().T)),
     }
     return delta_r.astype(np.complex128), info
+
+
+def solve_delta_fixed_point_iterative(
+    A: np.ndarray,
+    delta_A: np.ndarray,
+    r: np.ndarray,
+    *,
+    rtol: float = 1e-8,
+    atol: float = 0.0,
+    maximum_iterations: int | None = None,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    """Matrix-free constrained solve for the right-fixed-point derivative.
+
+    The rank-one stabilized operator
+
+    ``X -> X - E(X) + r trace(X)``
+
+    is nonsingular for an injective left-canonical tensor.  Its solution for
+    the traceless tangent source equals the constrained derivative.  Unlike
+    :func:`solve_delta_fixed_point`, this routine never constructs the
+    ``D**2`` transfer matrix or factorizes a dense augmented system.
+    """
+
+    A = np.asarray(A, dtype=np.complex128)
+    delta_A = np.asarray(delta_A, dtype=np.complex128)
+    r = np.asarray(r, dtype=np.complex128)
+    D = A.shape[1]
+    if delta_A.shape != A.shape or r.shape != (D, D):
+        raise ValueError("delta_A or r shape does not match A")
+    if rtol <= 0 or atol < 0:
+        raise ValueError("invalid iterative-solver tolerances")
+
+    source = delta_channel(A, delta_A, r)
+
+    def matvec(vector: np.ndarray) -> np.ndarray:
+        matrix = unvec(vector, D)
+        value = matrix - apply_channel(A, matrix)
+        value += r * np.trace(matrix)
+        return vec(value)
+
+    operator = LinearOperator(
+        (D * D, D * D), matvec=matvec, dtype=np.complex128
+    )
+    iterations = 0
+
+    def callback(_: object) -> None:
+        nonlocal iterations
+        iterations += 1
+
+    solution, solver_info = gmres(
+        operator,
+        vec(source),
+        rtol=float(rtol),
+        atol=float(atol),
+        maxiter=maximum_iterations,
+        callback=callback,
+        callback_type="pr_norm",
+    )
+    if solver_info != 0:
+        raise RuntimeError(
+            "iterative fixed-point derivative solve failed with "
+            f"info={solver_info}"
+        )
+    delta_r = unvec(solution, D)
+    delta_r = 0.5 * (delta_r + delta_r.conj().T)
+    delta_r -= r * np.trace(delta_r)
+    equation_residual = (
+        delta_r - apply_channel(A, delta_r) - source
+    )
+    return delta_r.astype(np.complex128), {
+        "equation_residual": float(la.norm(equation_residual)),
+        "trace_abs": float(abs(np.trace(delta_r))),
+        "hermiticity_error": float(la.norm(delta_r - delta_r.conj().T)),
+        "iterations": iterations,
+        "solver_info": int(solver_info),
+    }
+
+
+@dataclass
+class DenseFixedPointResponseSolver:
+    """Reusable LU solve for forward and adjoint fixed-point responses.
+
+    For one outer LM iteration, every JVP and VJP uses the same stabilized
+    transfer operator.  Factoring it once can therefore be cheaper than
+    restarting hundreds of matrix-free GMRES solves.  This is an optional
+    `O(D**4)` memory / `O(D**6)` setup tradeoff; it does not construct the RDM
+    Jacobian or a doubled-layer ring.
+    """
+
+    A: np.ndarray
+    r: np.ndarray
+    lu_and_pivots: tuple[np.ndarray, np.ndarray]
+
+    @classmethod
+    def from_tensor(
+        cls, A: np.ndarray, r: np.ndarray
+    ) -> "DenseFixedPointResponseSolver":
+        A = np.asarray(A, dtype=np.complex128)
+        r = np.asarray(r, dtype=np.complex128)
+        D = A.shape[1]
+        if A.ndim != 3 or A.shape[2] != D or r.shape != (D, D):
+            raise ValueError("A or r has an incompatible shape")
+        stabilized = (
+            np.eye(D * D, dtype=np.complex128)
+            - transfer_matrix(A)
+            + np.outer(vec(r), trace_row(D))
+        )
+        lu_and_pivots = la.lu_factor(
+            stabilized,
+            overwrite_a=True,
+            check_finite=False,
+        )
+        return cls(A.copy(), r.copy(), lu_and_pivots)
+
+    @property
+    def storage_bytes(self) -> int:
+        return int(
+            self.lu_and_pivots[0].nbytes
+            + self.lu_and_pivots[1].nbytes
+        )
+
+    def solve_delta(
+        self, delta_A: np.ndarray
+    ) -> tuple[np.ndarray, dict[str, float | int]]:
+        delta_A = np.asarray(delta_A, dtype=np.complex128)
+        if delta_A.shape != self.A.shape:
+            raise ValueError("delta_A shape does not match A")
+        D = self.A.shape[1]
+        source = delta_channel(self.A, delta_A, self.r)
+        solution = la.lu_solve(
+            self.lu_and_pivots,
+            vec(source),
+            trans=0,
+            check_finite=False,
+        )
+        delta_r = unvec(solution, D)
+        delta_r = 0.5 * (delta_r + delta_r.conj().T)
+        delta_r -= self.r * np.trace(delta_r)
+        equation_residual = (
+            delta_r - apply_channel(self.A, delta_r) - source
+        )
+        return delta_r.astype(np.complex128), {
+            "equation_residual": float(la.norm(equation_residual)),
+            "trace_abs": float(abs(np.trace(delta_r))),
+            "hermiticity_error": float(la.norm(delta_r - delta_r.conj().T)),
+            "iterations": 0,
+            "solver_info": 0,
+        }
+
+    def solve_adjoint(self, source: np.ndarray) -> np.ndarray:
+        source = np.asarray(source, dtype=np.complex128)
+        D = self.A.shape[1]
+        if source.shape != (D, D):
+            raise ValueError("adjoint source shape does not match A")
+        solution = la.lu_solve(
+            self.lu_and_pivots,
+            vec(source),
+            trans=2,
+            check_finite=False,
+        )
+        response = unvec(solution, D)
+        return (0.5 * (response + response.conj().T)).astype(np.complex128)

@@ -8,51 +8,62 @@ import scipy.linalg as la
 from .transfer import right_fixed_point
 
 
+def block_product_levels(A: np.ndarray, L: int) -> tuple[np.ndarray, ...]:
+    """Return prefix-product batches for every length from zero through ``L``."""
+
+    A = np.asarray(A, dtype=np.complex128)
+    if L < 0:
+        raise ValueError("L must be nonnegative")
+    d, D, _ = A.shape
+    levels = [np.eye(D, dtype=np.complex128)[None, :, :]]
+    for _ in range(L):
+        products = levels[-1]
+        next_products = np.matmul(
+            products[:, None, :, :], A[None, :, :, :]
+        ).reshape(products.shape[0] * d, D, D)
+        levels.append(next_products)
+    return tuple(levels)
+
+
 def block_products(A: np.ndarray, L: int) -> np.ndarray:
     """Return all products ``M_s = A[s_1] ... A[s_L]``.
 
     The output has shape ``(d**L, D, D)`` in lexicographic physical-index order.
     """
 
-    A = np.asarray(A, dtype=np.complex128)
-    if L < 0:
-        raise ValueError("L must be nonnegative")
-    d, D, _ = A.shape
-    products = np.eye(D, dtype=np.complex128)[None, :, :]
-    for _ in range(L):
-        next_products = np.empty((products.shape[0] * d, D, D), dtype=np.complex128)
-        out = 0
-        for P in products:
-            for i in range(d):
-                next_products[out] = P @ A[i]
-                out += 1
-        products = next_products
-    return products
+    return block_product_levels(A, L)[-1]
 
 
 def directional_block_products(
     A: np.ndarray,
     delta_A: np.ndarray,
     L: int,
+    *,
+    product_levels: tuple[np.ndarray, ...] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return ``M_s`` and ``delta M_s`` for a tensor tangent ``delta_A``."""
 
     A = np.asarray(A, dtype=np.complex128)
     delta_A = np.asarray(delta_A, dtype=np.complex128)
     d, D, _ = A.shape
-    products = np.eye(D, dtype=np.complex128)[None, :, :]
-    d_products = np.zeros_like(products)
-    for _ in range(L):
-        next_products = np.empty((products.shape[0] * d, D, D), dtype=np.complex128)
-        next_d_products = np.empty_like(next_products)
-        out = 0
-        for P, dP in zip(products, d_products):
-            for i in range(d):
-                next_products[out] = P @ A[i]
-                next_d_products[out] = dP @ A[i] + P @ delta_A[i]
-                out += 1
-        products = next_products
+    levels = block_product_levels(A, L) if product_levels is None else product_levels
+    if len(levels) != L + 1:
+        raise ValueError("product_levels must contain levels zero through L")
+    d_products = np.zeros_like(levels[0])
+    for level in range(L):
+        products = levels[level]
+        if products.shape != (d**level, D, D):
+            raise ValueError("product_levels contains an incompatible batch")
+        next_d_products = np.matmul(
+            d_products[:, None, :, :], A[None, :, :, :]
+        ).reshape(products.shape[0] * d, D, D)
+        next_d_products += np.matmul(
+            products[:, None, :, :], delta_A[None, :, :, :]
+        ).reshape(products.shape[0] * d, D, D)
         d_products = next_d_products
+    products = levels[-1]
+    if products.shape != (d**L, D, D):
+        raise ValueError("product_levels contains an incompatible final batch")
     return products, d_products
 
 

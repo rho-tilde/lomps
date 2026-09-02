@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import scipy.linalg as la
+
+
+TangentSlice = Literal["gauge_orthogonal", "grassmann"]
 
 from .canonical import (
     linearized_stiefel_error,
@@ -138,6 +142,22 @@ def tangent_bases(W: np.ndarray, d: int, D: int) -> TangentBases:
         antihermitian=anti_basis,
         B_basis=B_basis,
     )
+
+
+def grassmann_tangent_basis(
+    W: np.ndarray,
+    d: int,
+    D: int,
+) -> list[np.ndarray]:
+    """Return the TDVP/Grassmann slice ``W^dagger delta_W = 0``.
+
+    For a left-canonical tensor stacked as the isometry ``W``, every member
+    has the form ``W_perp X``.  The returned real Frobenius-orthonormal basis
+    has ``2 (d - 1) D**2`` elements and is a direct alternative quotient
+    representative to the true-gauge-orthogonal Stiefel slice.
+    """
+
+    return tangent_bases(W, d, D).perp
 
 
 def max_linearized_stiefel_error(W: np.ndarray, basis: list[np.ndarray]) -> float:

@@ -14,6 +14,11 @@ from .embedding import (
 )
 from .fixed_target_cg import FixedTargetGrassmannCG, optimize_fixed_target_cg
 from .integrable import exact_local_hs_rate, exact_transverse_magnetization
+from .matrix_free_lm import (
+    MatrixFreeLMOptions,
+    MatrixFreeLMResult,
+    optimize_fixed_target_matrix_free_lm,
+)
 from .optimizer import (
     CGOptions,
     LMOptions,
@@ -43,6 +48,8 @@ from .tensor_io import TensorLoadInfo, load_tensor_file
 __all__ = [
     "LMOptions",
     "LMResult",
+    "MatrixFreeLMOptions",
+    "MatrixFreeLMResult",
     "CGOptions",
     "LocalEvolutionProtocol",
     "NONINTEGRABLE_ISING",
@@ -59,6 +66,7 @@ __all__ = [
     "minimum_bond_dimension_for_ti_rdm",
     "optimizer_right_fixed_point",
     "optimize_tensor",
+    "optimize_fixed_target_matrix_free_lm",
     "local_expectations",
     "one_site_rdm",
     "trajectory_expectations",

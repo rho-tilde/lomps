@@ -49,9 +49,35 @@ The first product fit and later promotions have separate thresholds. The former
 defaults to `1e-15`; handoffs default to the recurrent `1e-14` threshold because
 they combine a dimension change with an ordinary physical time update.
 
-The first version deliberately refuses an existing top-level output directory;
-it does not yet resume the adaptive controller itself. Every child segment is a
-normal checkpointed `lomps-run`, so an interrupted segment remains inspectable
-and individually resumable. From a source checkout where the console entry
-point has not been refreshed, the equivalent invocation is
+Adaptive segments accept the same dense-LM production controls as `lomps-run`.
+For example, the explicit-Jacobian configuration used for recent large-`D`
+trajectories can be added unchanged:
+
+```bash
+  --fixed-point-solver fast \
+  --dense-verify-acceptance \
+  --lm-linear-solver normal \
+  --lm-tangent-slice grassmann \
+  --lm-initial-damping 1e-10 \
+  --lm-rdm-vectorization hermitian \
+  --lm-jacobian-response-solver dense-lu \
+  --lm-jacobian-workers 4 \
+  --maximum-step-seconds 600
+```
+
+These optimizer settings are passed to every bond-dimension segment and stored
+in the top-level frozen policy. The step-time limit is an execution safeguard:
+an over-limit accepted step is checkpointed before the child pauses, and the
+adaptive controller records the segment as resumable rather than promoting it.
+Set the process-level BLAS thread count separately in the launch environment;
+it is deliberately not a scientific trajectory parameter.
+
+The adaptive controller and every child segment are resumable. A `PAUSE` file
+inside the active segment stops the child cleanly between timesteps; the
+controller records that segment as active rather than promoting to the next
+bond dimension. Relaunch the identical adaptive command with `--resume` after
+removing the `PAUSE` file. Resume validates the frozen optimizer, tolerance,
+Hamiltonian, Trotter, dense-verification, Jacobian, rescue, checkpoint, and
+bond-ladder policy against the top-level manifest. From a source checkout where
+the console entry point has not been refreshed, the equivalent invocation is
 `python -m lomps.adaptive`.

@@ -3,7 +3,10 @@ from __future__ import annotations
 from argparse import Namespace
 import contextlib
 import io
+import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -14,15 +17,24 @@ from lomps.evolution import (
     effective_first_step_accept_cost,
     effective_initial_seed_lift_noise,
     first_step_cg_options,
+    fit_fixed_target,
+    horizontal_cg_options,
     infer_block_length,
+    main,
+    matrix_free_options,
     options,
     parse_args,
     parse_seed_list,
     protocol_from_args,
+    runtime_promotion_diagnostic,
+    run_fixed_target_optimizer,
     select_external_initial_seed,
     select_initial_seed,
+    step_limit_reached,
+    step_runtime_limit_exceeded,
 )
 from lomps.embedding import product_tensor
+from lomps.horizontal_cg import HorizontalCGOptions
 from lomps.protocol import INTEGRABLE_TFIM, NONINTEGRABLE_ISING
 from lomps.rdm import block_rdm
 
@@ -46,6 +58,123 @@ def protocol_args(block_length: int = 4) -> Namespace:
 
 
 class EvolutionProtocolTests(unittest.TestCase):
+    def test_runtime_promotion_uses_preceding_rolling_median(self) -> None:
+        history = [20.0, 22.0, 21.0, 24.0, 23.0, 25.0, 22.0, 23.0]
+        diagnostic = runtime_promotion_diagnostic(
+            65.0,
+            history,
+            factor=2.5,
+            window=8,
+            minimum_seconds=60.0,
+        )
+        self.assertIsNotNone(diagnostic)
+        assert diagnostic is not None
+        self.assertTrue(diagnostic["triggered"])
+        self.assertFalse(
+            runtime_promotion_diagnostic(
+                55.0,
+                history,
+                factor=2.5,
+                window=8,
+                minimum_seconds=60.0,
+            )["triggered"]
+        )
+        self.assertIsNone(
+            runtime_promotion_diagnostic(
+                100.0,
+                history[:7],
+                factor=2.5,
+                window=8,
+                minimum_seconds=60.0,
+            )
+        )
+
+    def test_same_dimension_external_seed_preserves_physical_predecessor(self) -> None:
+        source, _ = random_left_canonical(d=2, D=2, seed=780)
+        seed, _ = random_left_canonical(d=2, D=2, seed=781)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_path = root / "source.npy"
+            seed_path = root / "seed.npy"
+            output = root / "run"
+            np.save(source_path, source)
+            np.save(seed_path, seed)
+            argv = [
+                "lomps-evolve",
+                "--initial-A", str(source_path),
+                "--initial-layout", "physical-left-right",
+                "--initial-seed-A", str(seed_path),
+                "--initial-seed-layout", "physical-left-right",
+                "--output-dir", str(output),
+                "--steps", "1",
+                "--base-time", "0.0",
+                "--block-length", "1",
+                "--accept-cost", "10",
+                "--first-step-accept-cost", "10",
+                "--perturbations-per-amplitude", "0",
+                "--random-restarts", "0",
+                "--no-strict-retry",
+                "--checkpoint-every", "1",
+            ]
+            with patch("sys.argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                main()
+
+            states = np.load(output / "states.npy")
+            np.testing.assert_allclose(states[0], source, atol=0.0, rtol=0.0)
+            metadata = json.loads((output / "metadata.json").read_text())
+            self.assertEqual(metadata["states_zero_kind"], "initial_source")
+            self.assertTrue(
+                metadata["policy"][
+                    "same_dimension_external_seed_preserves_source_history"
+                ]
+            )
+
+    def test_strict_retry_continues_from_best_primary_iterate(self) -> None:
+        seed = np.zeros((2, 1, 1), dtype=np.complex128)
+        primary_A = np.ones_like(seed)
+        strict_A = 2.0 * np.ones_like(seed)
+        target = np.zeros((2, 2), dtype=np.complex128)
+        primary = SimpleNamespace(cost_tolerance=1e-6, fixed_point_solver="dense")
+        strict = SimpleNamespace(cost_tolerance=1e-6, fixed_point_solver="dense")
+        primary_result = SimpleNamespace(cost=1e-4)
+        strict_result = SimpleNamespace(cost=1e-8)
+
+        with (
+            patch(
+                "lomps.evolution.run_fixed_target_optimizer",
+                side_effect=((primary_A, primary_result), (strict_A, strict_result)),
+            ) as optimize,
+            patch(
+                "lomps.evolution.optimizer_right_fixed_point",
+                return_value=(np.ones((1, 1)), {}),
+            ),
+        ):
+            best_A, best, used_strict, _ = fit_fixed_target(
+                seed,
+                target,
+                primary,
+                strict,
+            )
+
+        np.testing.assert_array_equal(optimize.call_args_list[0].args[0], seed)
+        np.testing.assert_array_equal(
+            optimize.call_args_list[1].args[0], primary_A
+        )
+        np.testing.assert_array_equal(best_A, strict_A)
+        self.assertIs(best, strict_result)
+        self.assertTrue(used_strict)
+
+    def test_execution_step_limit_is_exact_and_optional(self) -> None:
+        self.assertFalse(step_limit_reached(181, 0))
+        self.assertFalse(step_limit_reached(180, 181))
+        self.assertTrue(step_limit_reached(181, 181))
+        self.assertTrue(step_limit_reached(182, 181))
+
+    def test_step_runtime_limit_is_strict_and_optional(self) -> None:
+        self.assertFalse(step_runtime_limit_exceeded(181.0, 0.0))
+        self.assertFalse(step_runtime_limit_exceeded(180.0, 180.0))
+        self.assertTrue(step_runtime_limit_exceeded(180.01, 180.0))
+
     def test_configured_l4_protocol_matches_reference_protocol(self) -> None:
         A, _ = random_left_canonical(d=2, D=2, seed=81)
         protocol = protocol_from_args(protocol_args())
@@ -99,6 +228,83 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertEqual(primary.linear_solver, "normal")
         self.assertEqual(strict.linear_solver, "normal")
 
+    def test_dense_lm_coordinate_controls_reach_both_option_sets(self) -> None:
+        primary, strict = options(
+            accept_cost=1e-12,
+            rank_tolerance=1e-12,
+            fixed_point_solver="fast",
+            linear_solver="normal",
+            tangent_slice="grassmann",
+            initial_damping=1e-10,
+            rdm_vectorization="hermitian",
+        )
+        for controls in (primary, strict):
+            self.assertEqual(controls.tangent_slice, "grassmann")
+            self.assertEqual(controls.initial_damping, 1e-10)
+            self.assertEqual(controls.rdm_vectorization, "hermitian")
+
+    def test_optimizer_options_use_separate_wall_time_caps(self) -> None:
+        primary, strict = options(
+            accept_cost=3e-16,
+            rank_tolerance=1e-12,
+            maximum_seconds=30.0,
+        )
+        self.assertEqual(primary.maximum_seconds, 30.0)
+        self.assertEqual(strict.maximum_seconds, 30.0)
+        matrix_free_primary, matrix_free_strict = matrix_free_options(
+            3e-16,
+            1e-12,
+            "dense",
+            krylov_initial_iterations=64,
+            krylov_max_iterations=256,
+            krylov_relative_tolerance=0.1,
+            krylov_minimum_relative_tolerance=1e-6,
+            adaptive_krylov_tolerance=True,
+            adjoint_rtol=1e-8,
+            jvp_fixed_point_rtol=1e-8,
+            maximum_seconds=900.0,
+        )
+        self.assertEqual(matrix_free_primary.maximum_seconds, 900.0)
+        self.assertEqual(matrix_free_strict.maximum_seconds, 900.0)
+        horizontal_primary, horizontal_strict = horizontal_cg_options(
+            3e-16,
+            "dense",
+            maximum_seconds=450.0,
+        )
+        self.assertEqual(horizontal_primary.maximum_seconds, 450.0)
+        self.assertEqual(horizontal_strict.maximum_seconds, 450.0)
+        self.assertEqual(
+            horizontal_primary.preconditioner,
+            "grassmann_right_fixed_point",
+        )
+        self.assertEqual(
+            horizontal_primary.conjugacy_metric,
+            "historical_slice",
+        )
+        self.assertEqual(horizontal_primary.line_search_interpolation, "secant")
+        self.assertEqual(horizontal_strict.gradient_tolerance, 1e-13)
+
+    def test_horizontal_cg_dispatch_uses_recurrent_optimizer(self) -> None:
+        seed = np.zeros((2, 1, 1), dtype=np.complex128)
+        target = np.zeros((2, 2), dtype=np.complex128)
+        options = HorizontalCGOptions(cost_tolerance=1e-12, verbose=False)
+        expected_A = np.ones_like(seed)
+        expected_result = SimpleNamespace(cost=0.0)
+        with patch(
+            "lomps.evolution.optimize_fixed_target_horizontal_cg",
+            return_value=(expected_A, expected_result),
+        ) as optimize:
+            actual_A, actual_result = run_fixed_target_optimizer(
+                seed,
+                target,
+                1,
+                options,
+                initial_fixed_point=np.ones((1, 1)),
+            )
+        np.testing.assert_array_equal(actual_A, expected_A)
+        self.assertIs(actual_result, expected_result)
+        optimize.assert_called_once_with(seed, target, 1, options)
+
     def test_parse_seed_list_deduplicates_and_ignores_blanks(self) -> None:
         self.assertEqual(parse_seed_list(" 2, , 5,2,8 "), (2, 5, 8))
         self.assertEqual(parse_seed_list(""), ())
@@ -132,12 +338,61 @@ class EvolutionProtocolTests(unittest.TestCase):
         self.assertIsNone(args.J)
         self.assertIsNone(args.symmetric_transverse)
         self.assertEqual(args.lm_linear_solver, "normal")
+        self.assertEqual(args.optimizer, "dense-lm")
+        self.assertEqual(args.optimizer_max_seconds, 600.0)
+        self.assertEqual(args.first_step_lm_seconds, 600.0)
+        self.assertEqual(args.matrix_free_krylov_initial_iterations, 64)
+        self.assertEqual(args.matrix_free_krylov_solver, "cg")
+        self.assertEqual(args.matrix_free_krylov_max_iterations, 256)
+        self.assertEqual(args.matrix_free_krylov_preconditioner, "none")
+        self.assertFalse(args.matrix_free_verbose)
+        self.assertFalse(args.matrix_free_recycle_krylov_solution)
+        self.assertFalse(args.matrix_free_dense_rescue)
+        self.assertEqual(args.matrix_free_dense_rescue_seconds, 3600.0)
+        self.assertEqual(args.lifted_first_step_backend, "same")
+        self.assertEqual(
+            args.horizontal_cg_preconditioner,
+            "grassmann-right-fixed-point",
+        )
+        self.assertEqual(
+            args.horizontal_cg_conjugacy_metric,
+            "historical-slice",
+        )
+        self.assertEqual(args.horizontal_cg_line_interpolation, "secant")
+        self.assertFalse(args.horizontal_cg_verbose)
+        self.assertEqual(
+            args.matrix_free_fixed_point_response_solver, "auto"
+        )
+        self.assertEqual(args.time_predictor, "warm")
         self.assertEqual(args.accept_cost, 1e-14)
         self.assertEqual(args.first_step_accept_cost, 3e-16)
         self.assertEqual(args.first_step_optimizer, "cg-lm")
         self.assertTrue(args.first_step_cg_precondition)
         self.assertFalse(args.first_step_cg_verbose)
         self.assertTrue(args.strict_retry)
+
+    def test_matrix_free_production_options_are_adaptive(self) -> None:
+        primary, strict = matrix_free_options(
+            1e-14,
+            1e-12,
+            "fast",
+            krylov_initial_iterations=64,
+            krylov_max_iterations=256,
+            krylov_relative_tolerance=0.1,
+            krylov_minimum_relative_tolerance=1e-6,
+            adaptive_krylov_tolerance=True,
+            adjoint_rtol=1e-8,
+            jvp_fixed_point_rtol=1e-8,
+        )
+        self.assertEqual(primary.krylov_initial_iterations, 64)
+        self.assertEqual(primary.krylov_max_iterations, 256)
+        self.assertTrue(primary.adaptive_krylov_tolerance)
+        self.assertFalse(primary.reduce_damping_only_on_krylov_convergence)
+        self.assertEqual(primary.gauge_projector, "structured")
+        self.assertEqual(primary.gauge_tolerance, 1e-10)
+        self.assertEqual(primary.fixed_point_response_solver, "auto")
+        self.assertEqual(strict.adjoint_rtol, 1e-10)
+        self.assertEqual(strict.jvp_fixed_point_rtol, 1e-10)
 
     def test_delta_t_can_override_reference_protocol(self) -> None:
         args = protocol_args()

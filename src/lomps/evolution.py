@@ -27,7 +27,18 @@ from .embedding import (
     product_circuit_left_canonical_seed,
 )
 from .fixed_target_cg import optimize_fixed_target_cg
+from .horizontal_cg import (
+    HorizontalCGOptions,
+    HorizontalCGResult,
+    optimize_fixed_target_horizontal_cg,
+)
+from .matrix_free_lm import (
+    MatrixFreeLMOptions,
+    MatrixFreeLMResult,
+    optimize_fixed_target_matrix_free_lm,
+)
 from .optimizer import CGOptions, LMOptions, optimizer_right_fixed_point, optimize_tensor
+from .predictor import trajectory_secant_predictor
 from .protocol import (
     DEFAULT_PROTOCOL_PRESET,
     PROTOCOL_PRESETS,
@@ -35,7 +46,11 @@ from .protocol import (
     NONINTEGRABLE_ISING,
     protocol_preset,
 )
+from .rdm import block_rdm
 from .tensor_io import TensorLayout, load_tensor_file
+
+
+OptimizerOptions = LMOptions | MatrixFreeLMOptions | HorizontalCGOptions
 
 
 def parse_args() -> argparse.Namespace:
@@ -203,6 +218,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--dense-verify-acceptance",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Recompute the final candidate cost with the deterministic dense "
+            "transfer fixed point before accepting it."
+        ),
+    )
+    parser.add_argument(
         "--lm-linear-solver",
         choices=("normal", "svd"),
         default="normal",
@@ -210,6 +234,275 @@ def parse_args() -> argparse.Namespace:
             "Linear solver inside LM optimizer evaluations. 'normal' builds "
             "the dense Jacobian but solves damped normal equations by Cholesky; "
             "'svd' keeps the older SVD-LM step and rank diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--lm-tangent-slice",
+        choices=("gauge-orthogonal", "grassmann"),
+        default="gauge-orthogonal",
+        help=(
+            "Quotient-tangent representative used by dense LM. "
+            "'gauge-orthogonal' is the established true-gauge basis; "
+            "'grassmann' uses the cheaper TDVP left-gauge slice."
+        ),
+    )
+    parser.add_argument(
+        "--lm-initial-damping",
+        type=float,
+        default=1e-4,
+        help="Initial scalar damping for each dense LM fixed-target solve.",
+    )
+    parser.add_argument(
+        "--lm-rdm-vectorization",
+        choices=("full", "hermitian"),
+        default="full",
+        help=(
+            "Real coordinate representation of the Hermitian RDM residual "
+            "and dense Jacobian. 'hermitian' preserves Frobenius geometry "
+            "while avoiding duplicated matrix entries."
+        ),
+    )
+    parser.add_argument(
+        "--lm-jacobian-response-solver",
+        choices=("lstsq", "dense-lu"),
+        default="lstsq",
+        help=(
+            "Fixed-point response solve used while constructing the dense "
+            "LM Jacobian. 'dense-lu' factors the stabilized square response "
+            "operator once per evaluation; 'lstsq' is the legacy path."
+        ),
+    )
+    parser.add_argument(
+        "--lm-jacobian-workers",
+        type=int,
+        default=1,
+        help=(
+            "Number of deterministic independent tangent-batch workers used "
+            "to construct the dense LM Jacobian."
+        ),
+    )
+    parser.add_argument(
+        "--optimizer",
+        choices=("dense-lm", "matrix-free-lm", "horizontal-cg"),
+        default="dense-lm",
+        help=(
+            "Fixed-target optimizer backend. 'dense-lm' is the established "
+            "explicit-J solver. 'matrix-free-lm' uses horizontal LM with "
+            "inner CG. 'horizontal-cg' uses gauge-horizontal nonlinear CG "
+            "with an analytic VJP. Neither alternative constructs the RDM "
+            "Jacobian or tangent basis."
+        ),
+    )
+    parser.add_argument(
+        "--optimizer-max-seconds",
+        type=float,
+        default=600.0,
+        help="Wall-time cap for each recurrent LM solve.",
+    )
+    parser.add_argument(
+        "--optimizer-iteration-cap",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of recorded outer LM iterations per recurrent "
+            "solve. Zero retains the legacy iteration limit."
+        ),
+    )
+    parser.add_argument(
+        "--first-step-lm-seconds",
+        type=float,
+        default=600.0,
+        help=(
+            "Wall-time cap for LM polishing of a lifted first step; the "
+            "preceding CG stage has its own --first-step-cg-seconds cap."
+        ),
+    )
+    parser.add_argument(
+        "--first-step-lm-iteration-cap",
+        type=int,
+        default=0,
+        help=(
+            "Maximum recorded outer LM iterations in first-step polishing. "
+            "Zero retains the legacy iteration limit."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-initial-iterations",
+        type=int,
+        default=64,
+        help="Initial Krylov iteration cap for matrix-free LM.",
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-solver",
+        choices=("cg", "lsmr"),
+        default="cg",
+        help=(
+            "Matrix-free linear solver. 'cg' acts on damped normal equations; "
+            "'lsmr' acts on the rectangular damped least-squares operator."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-max-iterations",
+        type=int,
+        default=256,
+        help="Largest adaptively selected inner-CG iteration cap.",
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-preconditioner",
+        choices=(
+            "none",
+            "right-fixed-point",
+            "right-fixed-point-stiefel",
+        ),
+        default="none",
+        help=(
+            "Inner-CG preconditioner. The Stiefel variant avoids structured "
+            "gauge solves inside CG and exactly gauge-projects the completed "
+            "LM direction."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-relative-tolerance",
+        type=float,
+        default=0.1,
+        help="Initial relative residual tolerance for the Krylov solve.",
+    )
+    parser.add_argument(
+        "--matrix-free-krylov-minimum-relative-tolerance",
+        type=float,
+        default=1e-6,
+        help="Smallest Krylov tolerance used near convergence.",
+    )
+    parser.add_argument(
+        "--matrix-free-adaptive-krylov-tolerance",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Tighten the Krylov tolerance as the outer residual falls.",
+    )
+    parser.add_argument(
+        "--matrix-free-recycle-krylov-solution",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Warm-start each Krylov solve from the preceding accepted step.",
+    )
+    parser.add_argument(
+        "--matrix-free-lsmr-condition-limit",
+        type=float,
+        default=1e12,
+        help="Condition-estimate stopping limit used only by LSMR.",
+    )
+    parser.add_argument(
+        "--matrix-free-fixed-point-response-solver",
+        choices=("auto", "iterative", "dense-lu"),
+        default="auto",
+        help=(
+            "Solver reused by JVP/VJP fixed-point responses. 'auto' uses a "
+            "cached dense LU only when its estimated storage fits the limit."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-free-fixed-point-response-max-mb",
+        type=float,
+        default=128.0,
+        help="Maximum cached response-factor storage selected by 'auto'.",
+    )
+    parser.add_argument(
+        "--matrix-free-adjoint-rtol",
+        type=float,
+        default=1e-8,
+        help="Relative tolerance for matrix-free adjoint fixed-point solves.",
+    )
+    parser.add_argument(
+        "--matrix-free-jvp-rtol",
+        type=float,
+        default=1e-8,
+        help="Relative tolerance for fixed-point derivatives inside JVPs.",
+    )
+    parser.add_argument(
+        "--matrix-free-verbose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print one diagnostic line per outer matrix-free LM iteration.",
+    )
+    parser.add_argument(
+        "--matrix-free-dense-rescue",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "If matrix-free LM misses the acceptance cost, continue the same "
+            "fixed target once with dense LM before declaring failure."
+        ),
+    )
+    parser.add_argument(
+        "--matrix-free-dense-rescue-seconds",
+        type=float,
+        default=3600.0,
+        help="Wall-time cap for the same-target dense-LM rescue.",
+    )
+    parser.add_argument(
+        "--matrix-free-dense-rescue-iteration-cap",
+        type=int,
+        default=0,
+        help="Dense-rescue LM iteration cap; zero keeps the legacy limit.",
+    )
+    parser.add_argument(
+        "--lifted-first-step-backend",
+        choices=("same", "dense-lm"),
+        default="same",
+        help=(
+            "Backend for the first target after a cross-D lift. 'same' uses "
+            "the recurrent backend; 'dense-lm' reserves explicit LM for the "
+            "handoff fit."
+        ),
+    )
+    parser.add_argument(
+        "--horizontal-cg-preconditioner",
+        choices=(
+            "none",
+            "right-fixed-point",
+            "grassmann-slice",
+            "grassmann-right-fixed-point",
+        ),
+        default="grassmann-right-fixed-point",
+        help="Preconditioner for recurrent gauge-horizontal nonlinear CG.",
+    )
+    parser.add_argument(
+        "--horizontal-cg-conjugacy-metric",
+        choices=("horizontal", "historical-slice"),
+        default="historical-slice",
+        help="Metric representation used for nonlinear-CG conjugacy.",
+    )
+    parser.add_argument(
+        "--horizontal-cg-line-interpolation",
+        choices=("bisection", "secant"),
+        default="secant",
+        help="Interpolation rule inside horizontal-CG line searches.",
+    )
+    parser.add_argument("--horizontal-cg-restart", type=int, default=100)
+    parser.add_argument(
+        "--horizontal-cg-maximum-line-search-evaluations",
+        type=int,
+        default=20,
+    )
+    parser.add_argument("--horizontal-cg-adjoint-rtol", type=float, default=1e-8)
+    parser.add_argument(
+        "--horizontal-cg-gauge-projector",
+        choices=("dense", "structured"),
+        default="dense",
+    )
+    parser.add_argument(
+        "--horizontal-cg-verbose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--time-predictor",
+        choices=("warm", "secant"),
+        default="warm",
+        help=(
+            "Optimizer seed for recurrent steps. 'secant' extrapolates the two "
+            "latest gauge-continuous tensors, retracts to left-canonical form, "
+            "and falls back to the warm tensor whenever its seed cost is worse."
         ),
     )
     parser.add_argument("--perturb-amplitudes", type=str, default="0.3,0.6,1,2,4,8")
@@ -336,12 +629,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-canonical-tolerance", type=float, default=1e-10)
     parser.add_argument("--checkpoint-every", type=int, default=25)
     parser.add_argument("--run-time-limit", type=float, default=0.0)
+    parser.add_argument(
+        "--maximum-step-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Pause after checkpointing an accepted physical step whose total "
+            "wall time exceeds this limit. Zero disables the limit."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-promotion-factor",
+        type=float,
+        default=0.0,
+        help=(
+            "After an accepted step, request bond-dimension promotion when "
+            "its wall time exceeds this factor times the rolling median. "
+            "Zero disables runtime-triggered promotion."
+        ),
+    )
+    parser.add_argument("--runtime-promotion-window", type=int, default=8)
+    parser.add_argument(
+        "--runtime-promotion-minimum-seconds", type=float, default=60.0
+    )
+    parser.add_argument(
+        "--stop-after-step",
+        type=int,
+        default=0,
+        help=(
+            "Pause after this total accepted-step index. This is an execution "
+            "control, so it may be changed between resumes without changing "
+            "the stored trajectory policy; zero disables the limit."
+        ),
+    )
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def step_limit_reached(completed: int, stop_after_step: int) -> bool:
+    """Return whether an execution-only accepted-step limit has been reached."""
+    return stop_after_step > 0 and completed >= stop_after_step
+
+
+def step_runtime_limit_exceeded(step_seconds: float, maximum_seconds: float) -> bool:
+    """Return whether an accepted physical step exceeded its execution limit."""
+
+    return maximum_seconds > 0 and step_seconds > maximum_seconds
+
+
+def runtime_promotion_diagnostic(
+    step_seconds: float,
+    preceding_step_seconds: list[float],
+    *,
+    factor: float,
+    window: int,
+    minimum_seconds: float,
+) -> dict[str, float | bool] | None:
+    """Return the rolling-median runtime trigger diagnostic, if enabled."""
+
+    if factor <= 0 or len(preceding_step_seconds) < window:
+        return None
+    reference = float(np.median(preceding_step_seconds[-window:]))
+    ratio = float(step_seconds / reference) if reference > 0 else float("inf")
+    return {
+        "reference_median_seconds": reference,
+        "ratio": ratio,
+        "triggered": bool(
+            step_seconds >= minimum_seconds and ratio >= factor
+        ),
+    }
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -378,6 +738,89 @@ def append_csv(path: Path, row: dict[str, Any]) -> None:
             writer.writeheader()
         writer.writerow(row)
         handle.flush()
+
+
+def append_matrix_free_history(
+    path: Path,
+    *,
+    step: int,
+    attempt: str,
+    result: object,
+) -> None:
+    """Persist every inner-CG diagnostic for one matrix-free fit."""
+
+    if not isinstance(result, MatrixFreeLMResult):
+        return
+    for record in result.history:
+        append_csv(
+            path,
+            {
+                "step": step,
+                "attempt": attempt,
+                "krylov_solver": result.krylov_solver,
+                "fixed_point_response_solver": (
+                    result.fixed_point_response_solver
+                ),
+                "fixed_point_response_storage_bytes": (
+                    result.fixed_point_response_storage_bytes
+                ),
+                **asdict(record),
+            },
+        )
+
+
+def append_horizontal_cg_history(
+    path: Path,
+    *,
+    step: int,
+    attempt: str,
+    result: object,
+) -> None:
+    """Persist nonlinear-CG line-search diagnostics for one fixed-target fit."""
+
+    if not isinstance(result, HorizontalCGResult):
+        return
+    for record in result.history:
+        append_csv(
+            path,
+            {
+                "step": step,
+                "attempt": attempt,
+                **asdict(record),
+            },
+        )
+
+
+def append_optimizer_history(
+    matrix_free_path: Path,
+    horizontal_cg_path: Path,
+    *,
+    step: int,
+    attempt: str,
+    result: object,
+) -> None:
+    """Persist backend-specific optimizer diagnostics when available."""
+
+    append_matrix_free_history(
+        matrix_free_path,
+        step=step,
+        attempt=attempt,
+        result=result,
+    )
+    append_horizontal_cg_history(
+        horizontal_cg_path,
+        step=step,
+        attempt=attempt,
+        result=result,
+    )
+
+
+def optimizer_evaluation_count(result: object) -> int:
+    """Return objective evaluations, falling back to outer history length."""
+
+    if hasattr(result, "objective_evaluations"):
+        return int(getattr(result, "objective_evaluations"))
+    return len(getattr(result, "history", ()))
 
 
 def load_initial(
@@ -435,18 +878,31 @@ def options(
     rank_tolerance: float,
     fixed_point_solver: str = "dense",
     linear_solver: str = "normal",
+    maximum_seconds: float = 600.0,
+    iteration_cap: int = 0,
+    tangent_slice: str = "gauge_orthogonal",
+    initial_damping: float = 1e-4,
+    rdm_vectorization: str = "full",
+    jacobian_response_solver: str = "lstsq",
+    jacobian_workers: int = 1,
 ) -> tuple[LMOptions, LMOptions]:
+    max_iterations = 40_000 if iteration_cap <= 0 else iteration_cap - 1
     primary = LMOptions(
-        max_iterations=40_000,
+        max_iterations=max_iterations,
         gradient_tolerance=1e-11,
         cost_tolerance=accept_cost,
         rank_tolerance=rank_tolerance,
+        tangent_slice=tangent_slice,
+        initial_damping=initial_damping,
         fixed_point_solver=fixed_point_solver,
         linear_solver=linear_solver,
+        rdm_vectorization=rdm_vectorization,
+        jacobian_response_solver=jacobian_response_solver,
+        jacobian_workers=jacobian_workers,
         plateau_window=50,
         plateau_relative_cost_drop=1e-4,
         plateau_absolute_cost_drop=1e-20,
-        maximum_seconds=600.0,
+        maximum_seconds=maximum_seconds,
         verbose=False,
     )
     strict = replace(
@@ -457,6 +913,153 @@ def options(
         plateau_absolute_cost_drop=1e-24,
     )
     return primary, strict
+
+
+def matrix_free_options(
+    accept_cost: float,
+    rank_tolerance: float,
+    fixed_point_solver: str,
+    *,
+    krylov_initial_iterations: int,
+    krylov_max_iterations: int,
+    krylov_relative_tolerance: float,
+    krylov_minimum_relative_tolerance: float,
+    adaptive_krylov_tolerance: bool,
+    adjoint_rtol: float,
+    jvp_fixed_point_rtol: float,
+    krylov_preconditioner: str = "none",
+    verbose: bool = False,
+    krylov_solver: str = "cg",
+    recycle_krylov_solution: bool = False,
+    lsmr_condition_limit: float = 1e12,
+    fixed_point_response_solver: str = "auto",
+    fixed_point_response_maximum_bytes: int = 128 * 1024**2,
+    maximum_seconds: float = 600.0,
+    iteration_cap: int = 0,
+) -> tuple[MatrixFreeLMOptions, MatrixFreeLMOptions]:
+    """Production and strict controls for basis-free horizontal LM."""
+
+    max_iterations = 40_000 if iteration_cap <= 0 else iteration_cap - 1
+    primary = MatrixFreeLMOptions(
+        max_iterations=max_iterations,
+        gradient_tolerance=1e-11,
+        cost_tolerance=accept_cost,
+        gauge_tolerance=max(rank_tolerance, 1e-10),
+        fixed_point_solver=fixed_point_solver,
+        fixed_point_response_solver=fixed_point_response_solver,
+        fixed_point_response_maximum_bytes=(
+            fixed_point_response_maximum_bytes
+        ),
+        krylov_solver=krylov_solver,
+        krylov_initial_iterations=krylov_initial_iterations,
+        krylov_max_iterations=krylov_max_iterations,
+        krylov_relative_tolerance=krylov_relative_tolerance,
+        krylov_minimum_relative_tolerance=(
+            krylov_minimum_relative_tolerance
+        ),
+        adaptive_krylov_tolerance=adaptive_krylov_tolerance,
+        krylov_preconditioner=krylov_preconditioner,
+        recycle_krylov_solution=recycle_krylov_solution,
+        lsmr_condition_limit=lsmr_condition_limit,
+        adjoint_rtol=adjoint_rtol,
+        jvp_fixed_point_rtol=jvp_fixed_point_rtol,
+        reduce_damping_only_on_krylov_convergence=False,
+        plateau_window=50,
+        plateau_relative_cost_drop=1e-4,
+        plateau_absolute_cost_drop=1e-20,
+        maximum_seconds=maximum_seconds,
+        verbose=verbose,
+    )
+    strict = replace(
+        primary,
+        gradient_tolerance=1e-13,
+        krylov_minimum_relative_tolerance=min(
+            primary.krylov_minimum_relative_tolerance, 1e-8
+        ),
+        adjoint_rtol=min(primary.adjoint_rtol, 1e-10),
+        jvp_fixed_point_rtol=min(primary.jvp_fixed_point_rtol, 1e-10),
+        plateau_window=200,
+        plateau_relative_cost_drop=1e-9,
+        plateau_absolute_cost_drop=1e-24,
+    )
+    return primary, strict
+
+
+def horizontal_cg_options(
+    accept_cost: float,
+    fixed_point_solver: str,
+    *,
+    preconditioner: str = "grassmann_right_fixed_point",
+    conjugacy_metric: str = "historical_slice",
+    line_search_interpolation: str = "secant",
+    restart: int = 100,
+    maximum_line_search_evaluations: int = 20,
+    adjoint_rtol: float = 1e-8,
+    gauge_projector: str = "dense",
+    maximum_seconds: float = 600.0,
+    iteration_cap: int = 0,
+    verbose: bool = False,
+) -> tuple[HorizontalCGOptions, HorizontalCGOptions]:
+    """Build recurrent and strict gauge-horizontal nonlinear-CG controls."""
+
+    max_iterations = 40_000 if iteration_cap <= 0 else iteration_cap
+    primary = HorizontalCGOptions(
+        max_iterations=max_iterations,
+        cost_tolerance=accept_cost,
+        gradient_tolerance=1e-11,
+        preconditioner=preconditioner,
+        conjugacy_metric=conjugacy_metric,
+        line_search_interpolation=line_search_interpolation,
+        restart=restart,
+        maximum_line_search_evaluations=maximum_line_search_evaluations,
+        adjoint_rtol=adjoint_rtol,
+        gauge_projector=gauge_projector,
+        maximum_seconds=maximum_seconds,
+        fixed_point_solver=fixed_point_solver,
+        verbose=verbose,
+    )
+    strict = replace(
+        primary,
+        gradient_tolerance=1e-13,
+        maximum_line_search_evaluations=max(
+            40, primary.maximum_line_search_evaluations
+        ),
+    )
+    return primary, strict
+
+
+def run_fixed_target_optimizer(
+    seed: np.ndarray,
+    target: np.ndarray,
+    block_length: int,
+    optimizer_options: OptimizerOptions,
+    *,
+    initial_fixed_point: np.ndarray | None = None,
+) -> tuple[np.ndarray, object]:
+    """Dispatch one fixed-target fit without changing its target."""
+
+    if isinstance(optimizer_options, MatrixFreeLMOptions):
+        return optimize_fixed_target_matrix_free_lm(
+            seed,
+            target,
+            block_length,
+            optimizer_options,
+            initial_fixed_point=initial_fixed_point,
+        )
+    if isinstance(optimizer_options, HorizontalCGOptions):
+        return optimize_fixed_target_horizontal_cg(
+            seed,
+            target,
+            block_length,
+            optimizer_options,
+        )
+    return optimize_tensor(
+        seed,
+        target,
+        block_length,
+        optimizer_options,
+        initial_fixed_point=initial_fixed_point,
+    )
 
 
 def first_step_cg_options(
@@ -551,7 +1154,7 @@ def select_initial_seed(
     trajectory_bond_dimension: int,
     *,
     protocol: LocalEvolutionProtocol,
-    primary: LMOptions,
+    primary: OptimizerOptions,
     initial_seed_mode: str,
     embedding_noise_amplitude: float,
     embedding_seed: int,
@@ -632,7 +1235,7 @@ def select_initial_seed(
             canonical_tolerance=canonical_tolerance,
         )
         started = time.perf_counter()
-        _, result = optimize_tensor(
+        _, result = run_fixed_target_optimizer(
             seed_tensor,
             target,
             protocol.block_length,
@@ -646,7 +1249,7 @@ def select_initial_seed(
             "cost": float(result.cost),
             "target_residual": float(result.residual_norm),
             "status": result.status,
-            "evaluations": len(result.history),
+            "evaluations": optimizer_evaluation_count(result),
             "seconds": seconds,
             "seed_transfer_gap": float(diagnostics.seed_transfer_gap),
             "seed_right_fixed_point_minimum_eigenvalue": float(
@@ -657,7 +1260,7 @@ def select_initial_seed(
         rows.append(row)
         print(
             f"embedding-screen seed={candidate_seed} cost={result.cost:.2e} "
-            f"status={result.status} evals={len(result.history)}",
+            f"status={result.status} evals={optimizer_evaluation_count(result)}",
             flush=True,
         )
         if best is None or result.cost < best[0]:
@@ -696,8 +1299,8 @@ def select_external_initial_seed(
 def fit_fixed_target(
     seed: np.ndarray,
     target: np.ndarray,
-    primary: LMOptions,
-    strict: LMOptions,
+    primary: OptimizerOptions,
+    strict: OptimizerOptions,
     seed_fixed_point: np.ndarray | None = None,
     *,
     use_strict_retry: bool = True,
@@ -706,7 +1309,7 @@ def fit_fixed_target(
 
     started = time.perf_counter()
     block_length = infer_block_length(seed, target)
-    best_A, best = optimize_tensor(
+    best_A, best = run_fixed_target_optimizer(
         seed,
         target,
         block_length,
@@ -715,12 +1318,20 @@ def fit_fixed_target(
     )
     used_strict = False
     if use_strict_retry and best.cost > primary.cost_tolerance:
-        strict_A, strict_result = optimize_tensor(
-            seed,
+        # Continue from the best primary iterate.  Restarting the strict solve
+        # from the original seed discards precisely the progress that the
+        # retry is meant to refine, and is especially damaging when a solve
+        # has stopped only marginally above the acceptance threshold.
+        best_r, _ = optimizer_right_fixed_point(
+            best_A,
+            strict.fixed_point_solver,
+        )
+        strict_A, strict_result = run_fixed_target_optimizer(
+            best_A,
             target,
             block_length,
             strict,
-            initial_fixed_point=seed_fixed_point,
+            initial_fixed_point=best_r,
         )
         if strict_result.cost < best.cost:
             best_A, best = strict_A, strict_result
@@ -791,6 +1402,18 @@ def main() -> None:
     args = parse_args()
     if args.steps < 1 or args.checkpoint_every < 1:
         raise ValueError("steps and checkpoint cadence must be positive")
+    if args.stop_after_step < 0 or args.stop_after_step > args.steps:
+        raise ValueError("--stop-after-step must be zero or lie within --steps")
+    if args.maximum_step_seconds < 0:
+        raise ValueError("--maximum-step-seconds must be non-negative")
+    if args.runtime_promotion_factor < 0:
+        raise ValueError("--runtime-promotion-factor must be non-negative")
+    if args.runtime_promotion_window < 1:
+        raise ValueError("--runtime-promotion-window must be positive")
+    if args.runtime_promotion_minimum_seconds < 0:
+        raise ValueError(
+            "--runtime-promotion-minimum-seconds must be non-negative"
+        )
     if args.accept_cost <= 0:
         raise ValueError("--accept-cost must be positive")
     first_step_accept_cost = effective_first_step_accept_cost(
@@ -801,8 +1424,55 @@ def main() -> None:
         raise ValueError("--first-step-accept-cost must be positive")
     if args.first_step_cg_max_iterations < 0 or args.first_step_cg_restart < 1:
         raise ValueError("invalid first-step CG iteration controls")
+    if args.optimizer_iteration_cap < 0 or args.first_step_lm_iteration_cap < 0:
+        raise ValueError("LM iteration caps must be non-negative")
+    if args.lm_jacobian_workers < 1:
+        raise ValueError("--lm-jacobian-workers must be positive")
+    if args.matrix_free_dense_rescue_iteration_cap < 0:
+        raise ValueError("dense-rescue LM iteration cap must be non-negative")
+    if args.matrix_free_dense_rescue and args.optimizer != "matrix-free-lm":
+        raise ValueError("dense rescue requires --optimizer matrix-free-lm")
     if args.first_step_cg_seconds < 0:
         raise ValueError("--first-step-cg-seconds must be non-negative")
+    if (
+        args.optimizer_max_seconds <= 0
+        or args.first_step_lm_seconds <= 0
+        or args.matrix_free_dense_rescue_seconds <= 0
+    ):
+        raise ValueError("optimizer wall-time caps must be positive")
+    if args.horizontal_cg_restart < 1:
+        raise ValueError("--horizontal-cg-restart must be positive")
+    if args.horizontal_cg_maximum_line_search_evaluations < 1:
+        raise ValueError(
+            "--horizontal-cg-maximum-line-search-evaluations must be positive"
+        )
+    if args.horizontal_cg_adjoint_rtol <= 0:
+        raise ValueError("--horizontal-cg-adjoint-rtol must be positive")
+    if not (
+        1
+        <= args.matrix_free_krylov_initial_iterations
+        <= args.matrix_free_krylov_max_iterations
+    ):
+        raise ValueError(
+            "matrix-free Krylov iteration limits must satisfy "
+            "1 <= initial <= maximum"
+        )
+    if not (
+        0 < args.matrix_free_krylov_minimum_relative_tolerance
+        <= args.matrix_free_krylov_relative_tolerance
+    ):
+        raise ValueError(
+            "matrix-free Krylov tolerances must satisfy "
+            "0 < minimum <= initial"
+        )
+    if args.matrix_free_adjoint_rtol <= 0 or args.matrix_free_jvp_rtol <= 0:
+        raise ValueError("matrix-free fixed-point tolerances must be positive")
+    if args.matrix_free_lsmr_condition_limit <= 1:
+        raise ValueError("--matrix-free-lsmr-condition-limit must exceed one")
+    if args.matrix_free_fixed_point_response_max_mb < 0:
+        raise ValueError(
+            "--matrix-free-fixed-point-response-max-mb must be non-negative"
+        )
     if (
         args.initial_seed_lift_noise_amplitude is not None
         and args.initial_seed_lift_noise_amplitude <= 0
@@ -840,18 +1510,146 @@ def main() -> None:
         trajectory_bond_dimension=trajectory_bond_dimension,
         embedding_noise_amplitude=args.embedding_noise_amplitude,
     )
-    primary, strict = options(
-        args.accept_cost,
-        args.rank_tolerance,
-        args.fixed_point_solver,
-        args.lm_linear_solver,
-    )
-    first_primary, first_strict = options(
-        first_step_accept_cost,
-        args.rank_tolerance,
-        args.fixed_point_solver,
-        args.lm_linear_solver,
-    )
+    if args.optimizer == "matrix-free-lm":
+        optimizer_option_arguments = {
+            "rank_tolerance": args.rank_tolerance,
+            "fixed_point_solver": args.fixed_point_solver,
+            "krylov_initial_iterations": (
+                args.matrix_free_krylov_initial_iterations
+            ),
+            "krylov_max_iterations": args.matrix_free_krylov_max_iterations,
+            "krylov_relative_tolerance": (
+                args.matrix_free_krylov_relative_tolerance
+            ),
+            "krylov_minimum_relative_tolerance": (
+                args.matrix_free_krylov_minimum_relative_tolerance
+            ),
+            "adaptive_krylov_tolerance": (
+                args.matrix_free_adaptive_krylov_tolerance
+            ),
+            "adjoint_rtol": args.matrix_free_adjoint_rtol,
+            "jvp_fixed_point_rtol": args.matrix_free_jvp_rtol,
+            "verbose": args.matrix_free_verbose,
+            "krylov_solver": args.matrix_free_krylov_solver,
+            "krylov_preconditioner": (
+                args.matrix_free_krylov_preconditioner.replace("-", "_")
+            ),
+            "recycle_krylov_solution": (
+                args.matrix_free_recycle_krylov_solution
+            ),
+            "lsmr_condition_limit": (
+                args.matrix_free_lsmr_condition_limit
+            ),
+            "fixed_point_response_solver": (
+                args.matrix_free_fixed_point_response_solver.replace("-", "_")
+            ),
+            "fixed_point_response_maximum_bytes": int(
+                args.matrix_free_fixed_point_response_max_mb * 1024**2
+            ),
+        }
+        primary, strict = matrix_free_options(
+            args.accept_cost,
+            maximum_seconds=args.optimizer_max_seconds,
+            iteration_cap=args.optimizer_iteration_cap,
+            **optimizer_option_arguments,
+        )
+        first_primary, first_strict = matrix_free_options(
+            first_step_accept_cost,
+            maximum_seconds=args.first_step_lm_seconds,
+            iteration_cap=args.first_step_lm_iteration_cap,
+            **optimizer_option_arguments,
+        )
+    elif args.optimizer == "horizontal-cg":
+        horizontal_option_arguments = {
+            "fixed_point_solver": args.fixed_point_solver,
+            "preconditioner": args.horizontal_cg_preconditioner.replace(
+                "-", "_"
+            ),
+            "conjugacy_metric": args.horizontal_cg_conjugacy_metric.replace(
+                "-", "_"
+            ),
+            "line_search_interpolation": (
+                args.horizontal_cg_line_interpolation
+            ),
+            "restart": args.horizontal_cg_restart,
+            "maximum_line_search_evaluations": (
+                args.horizontal_cg_maximum_line_search_evaluations
+            ),
+            "adjoint_rtol": args.horizontal_cg_adjoint_rtol,
+            "gauge_projector": args.horizontal_cg_gauge_projector,
+            "verbose": args.horizontal_cg_verbose,
+        }
+        primary, strict = horizontal_cg_options(
+            args.accept_cost,
+            maximum_seconds=args.optimizer_max_seconds,
+            iteration_cap=args.optimizer_iteration_cap,
+            **horizontal_option_arguments,
+        )
+        first_primary, first_strict = horizontal_cg_options(
+            first_step_accept_cost,
+            maximum_seconds=args.first_step_lm_seconds,
+            iteration_cap=args.first_step_lm_iteration_cap,
+            **horizontal_option_arguments,
+        )
+    else:
+        primary, strict = options(
+            args.accept_cost,
+            args.rank_tolerance,
+            args.fixed_point_solver,
+            args.lm_linear_solver,
+            args.optimizer_max_seconds,
+            args.optimizer_iteration_cap,
+            args.lm_tangent_slice.replace("-", "_"),
+            args.lm_initial_damping,
+            args.lm_rdm_vectorization,
+            args.lm_jacobian_response_solver.replace("-", "_"),
+            args.lm_jacobian_workers,
+        )
+        first_primary, first_strict = options(
+            first_step_accept_cost,
+            args.rank_tolerance,
+            args.fixed_point_solver,
+            args.lm_linear_solver,
+            args.first_step_lm_seconds,
+            args.first_step_lm_iteration_cap,
+            args.lm_tangent_slice.replace("-", "_"),
+            args.lm_initial_damping,
+            args.lm_rdm_vectorization,
+            args.lm_jacobian_response_solver.replace("-", "_"),
+            args.lm_jacobian_workers,
+        )
+    dense_rescue_primary = None
+    dense_rescue_strict = None
+    if args.optimizer == "matrix-free-lm" and args.matrix_free_dense_rescue:
+        dense_rescue_primary, dense_rescue_strict = options(
+            args.accept_cost,
+            args.rank_tolerance,
+            args.fixed_point_solver,
+            args.lm_linear_solver,
+            args.matrix_free_dense_rescue_seconds,
+            args.matrix_free_dense_rescue_iteration_cap,
+            args.lm_tangent_slice.replace("-", "_"),
+            args.lm_initial_damping,
+            args.lm_rdm_vectorization,
+            args.lm_jacobian_response_solver.replace("-", "_"),
+            args.lm_jacobian_workers,
+        )
+    lifted_dense_primary = None
+    lifted_dense_strict = None
+    if args.lifted_first_step_backend == "dense-lm":
+        lifted_dense_primary, lifted_dense_strict = options(
+            first_step_accept_cost,
+            args.rank_tolerance,
+            args.fixed_point_solver,
+            args.lm_linear_solver,
+            args.first_step_lm_seconds,
+            args.first_step_lm_iteration_cap,
+            args.lm_tangent_slice.replace("-", "_"),
+            args.lm_initial_damping,
+            args.lm_rdm_vectorization,
+            args.lm_jacobian_response_solver.replace("-", "_"),
+            args.lm_jacobian_workers,
+        )
     first_step_cg = first_step_cg_options(
         args,
         accept_cost=first_step_accept_cost,
@@ -871,6 +1669,7 @@ def main() -> None:
         "initial_seed_lift_noise_amplitude": initial_seed_lift_noise_amplitude,
         "fixed_point_solver": args.fixed_point_solver,
         "lm_linear_solver": args.lm_linear_solver,
+        "time_predictor": args.time_predictor,
         "accept_cost": args.accept_cost,
         "first_step_accept_cost": first_step_accept_cost,
         "initial_seed_mode": args.initial_seed_mode,
@@ -890,9 +1689,39 @@ def main() -> None:
         "random_restarts": args.random_restarts,
         "random_seed": args.random_seed,
         "strict_retry": args.strict_retry,
+        "optimizer_iteration_cap": args.optimizer_iteration_cap,
+        "first_step_lm_iteration_cap": args.first_step_lm_iteration_cap,
         "primary_optimizer": asdict(primary),
         "strict_optimizer": asdict(strict),
     }
+    preserve_initial_source_history = (
+        initial_seed_source is not None
+        and initial_source.shape[1] == trajectory_bond_dimension
+        and initial_source.shape[2] == trajectory_bond_dimension
+    )
+    if preserve_initial_source_history:
+        policy["same_dimension_external_seed_preserves_source_history"] = True
+    # Preserve the exact legacy dense-LM policy dictionary so existing dense
+    # trajectories remain resumable after this optional backend was added.
+    if args.optimizer != "dense-lm":
+        policy["optimizer_backend"] = args.optimizer
+    if args.matrix_free_dense_rescue:
+        policy["matrix_free_dense_rescue"] = {
+            "maximum_seconds": args.matrix_free_dense_rescue_seconds,
+            "iteration_cap": args.matrix_free_dense_rescue_iteration_cap,
+            "optimizer": asdict(dense_rescue_primary),
+            "strict_optimizer": asdict(dense_rescue_strict),
+        }
+    if args.lifted_first_step_backend != "same":
+        policy["lifted_first_step_backend"] = args.lifted_first_step_backend
+    if args.runtime_promotion_factor > 0:
+        policy["runtime_promotion"] = {
+            "factor": args.runtime_promotion_factor,
+            "window": args.runtime_promotion_window,
+            "minimum_seconds": args.runtime_promotion_minimum_seconds,
+        }
+    if args.dense_verify_acceptance:
+        policy["dense_verify_acceptance"] = True
 
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
@@ -907,6 +1736,9 @@ def main() -> None:
     initial_seed_source_path = output / "initial_seed_source.npy"
     steps_path = output / "steps.csv"
     restarts_path = output / "restart_trials.csv"
+    matrix_free_history_path = output / "matrix_free_optimizer_iterations.csv"
+    horizontal_cg_history_path = output / "horizontal_cg_optimizer_iterations.csv"
+    backend_rescues_path = output / "backend_rescue_trials.csv"
     metadata_path = output / "metadata.json"
     pause_path = output / "PAUSE"
 
@@ -931,7 +1763,15 @@ def main() -> None:
                 initial_source,
                 protocol.target_source_fixed_point_solver,
             )
-        A = states[completed].copy()
+        if completed == 0 and preserve_initial_source_history:
+            A = np.load(initial_seed_path, allow_pickle=False)
+            initial_optimizer_seed_r, _ = optimizer_right_fixed_point(
+                A,
+                args.fixed_point_solver,
+            )
+        else:
+            A = states[completed].copy()
+            initial_optimizer_seed_r = None
         metadata["status"] = "running"
         metadata["resumed_at"] = utc_now()
         metadata.pop("failure", None)
@@ -985,8 +1825,20 @@ def main() -> None:
             initial_seed,
             protocol.target_source_fixed_point_solver,
         )
-        states[0] = initial_seed
-        right_fixed_points[0] = initial_seed_r
+        if preserve_initial_source_history:
+            states[0] = initial_source
+            right_fixed_points[0] = initial_source_r
+            if args.fixed_point_solver == protocol.target_source_fixed_point_solver:
+                initial_optimizer_seed_r = initial_seed_r
+            else:
+                initial_optimizer_seed_r, _ = optimizer_right_fixed_point(
+                    initial_seed,
+                    args.fixed_point_solver,
+                )
+        else:
+            states[0] = initial_seed
+            right_fixed_points[0] = initial_seed_r
+            initial_optimizer_seed_r = None
         states.flush()
         right_fixed_points.flush()
         atomic_npy(initial_source_path, initial_source)
@@ -1031,6 +1883,11 @@ def main() -> None:
                 None if initial_seed_source is None else list(initial_seed_source.shape)
             ),
             "initial_seed_shape": list(initial_seed.shape),
+            "states_zero_kind": (
+                "initial_source"
+                if preserve_initial_source_history
+                else "initial_seed"
+            ),
             "right_fixed_points_shape": list(right_fixed_points.shape),
             "initial_source_right_fixed_point_info": fixed_point_info_json(
                 initial_source_r_info
@@ -1049,6 +1906,14 @@ def main() -> None:
         }
         atomic_json(metadata_path, metadata)
 
+    preceding_step_seconds: list[float] = []
+    if completed > 0 and steps_path.exists():
+        with steps_path.open(newline="") as handle:
+            saved_rows = list(csv.DictReader(handle))[:completed]
+        preceding_step_seconds = [
+            float(row["step_seconds"]) for row in saved_rows
+        ]
+
     invocation_started = time.perf_counter()
     cumulative_seconds = float(metadata.get("cumulative_seconds", 0.0))
     rescue_events = int(metadata.get("rescue_events", 0))
@@ -1057,6 +1922,9 @@ def main() -> None:
         for step in range(completed + 1, args.steps + 1):
             if pause_path.exists():
                 status = "paused_by_PAUSE_file"
+                break
+            if step_limit_reached(completed, args.stop_after_step):
+                status = "paused_by_step_limit"
                 break
             if args.run_time_limit > 0 and time.perf_counter() - invocation_started >= args.run_time_limit:
                 status = "paused_by_run_time_limit"
@@ -1085,8 +1953,19 @@ def main() -> None:
             )
             active_primary = first_primary if use_first_step_threshold else primary
             active_strict = first_strict if use_first_step_threshold else strict
+            if (
+                use_first_step_threshold
+                and lifted_dense_primary is not None
+                and lifted_dense_strict is not None
+            ):
+                active_primary = lifted_dense_primary
+                active_strict = lifted_dense_strict
             first_step_cg_result = None
             first_step_cg_seconds = 0.0
+            warm_seed_cost = float("nan")
+            predictor_seed_cost = float("nan")
+            optimizer_seed_kind = "warm_start"
+            predictor_fallback_used = False
             if use_first_step_cg:
                 print(
                     "first-step optimizer=cg-lm target_source=initial_source "
@@ -1103,6 +1982,17 @@ def main() -> None:
                     active_strict,
                     use_strict_retry=args.strict_retry,
                 )
+                append_optimizer_history(
+                    matrix_free_history_path,
+                    horizontal_cg_history_path,
+                    step=step,
+                    attempt=(
+                        "first_step_polish_strict"
+                        if used_strict
+                        else "first_step_polish"
+                    ),
+                    result=result,
+                )
                 fit_seconds = first_step_cg_seconds + polish_seconds
                 warm_cost = float(first_step_cg_result.cost)
                 print(
@@ -1112,22 +2002,154 @@ def main() -> None:
                     flush=True,
                 )
             else:
+                optimizer_seed = A
+                optimizer_seed_r = (
+                    np.asarray(initial_optimizer_seed_r, dtype=np.complex128)
+                    if step == 1 and initial_optimizer_seed_r is not None
+                    else np.asarray(
+                        right_fixed_points[completed], dtype=np.complex128
+                    )
+                )
+                warm_seed_cost = 0.5 * float(
+                    np.linalg.norm(
+                        block_rdm(A, protocol.block_length, optimizer_seed_r) - target
+                    )
+                    ** 2
+                )
+                if args.time_predictor == "secant" and completed >= 1:
+                    predicted_seed = trajectory_secant_predictor(
+                        np.asarray(states[completed - 1], dtype=np.complex128), A
+                    )
+                    predicted_seed_r, _ = optimizer_right_fixed_point(
+                        predicted_seed, args.fixed_point_solver
+                    )
+                    predictor_seed_cost = 0.5 * float(
+                        np.linalg.norm(
+                            block_rdm(
+                                predicted_seed,
+                                protocol.block_length,
+                                predicted_seed_r,
+                            )
+                            - target
+                        )
+                        ** 2
+                    )
+                    if (
+                        np.isfinite(predictor_seed_cost)
+                        and predictor_seed_cost < warm_seed_cost
+                    ):
+                        optimizer_seed = predicted_seed
+                        optimizer_seed_r = predicted_seed_r
+                        optimizer_seed_kind = "trajectory_secant"
                 next_A, result, used_strict, fit_seconds = fit_fixed_target(
-                    A,
+                    optimizer_seed,
                     target,
                     active_primary,
                     active_strict,
-                    seed_fixed_point=np.asarray(
-                        right_fixed_points[completed],
-                        dtype=np.complex128,
-                    ),
+                    seed_fixed_point=optimizer_seed_r,
                     use_strict_retry=args.strict_retry,
                 )
+                append_optimizer_history(
+                    matrix_free_history_path,
+                    horizontal_cg_history_path,
+                    step=step,
+                    attempt=(
+                        f"{optimizer_seed_kind}_strict"
+                        if used_strict
+                        else optimizer_seed_kind
+                    ),
+                    result=result,
+                )
                 warm_cost = float(result.cost)
+                if (
+                    optimizer_seed_kind == "trajectory_secant"
+                    and result.cost > active_accept_cost
+                ):
+                    fallback_A, fallback_result, fallback_strict, fallback_seconds = (
+                        fit_fixed_target(
+                            A,
+                            target,
+                            active_primary,
+                            active_strict,
+                            seed_fixed_point=np.asarray(
+                                right_fixed_points[completed], dtype=np.complex128
+                            ),
+                            use_strict_retry=args.strict_retry,
+                        )
+                    )
+                    fit_seconds += fallback_seconds
+                    predictor_fallback_used = True
+                    append_optimizer_history(
+                        matrix_free_history_path,
+                        horizontal_cg_history_path,
+                        step=step,
+                        attempt=(
+                            "warm_start_fallback_strict"
+                            if fallback_strict
+                            else "warm_start_fallback"
+                        ),
+                        result=fallback_result,
+                    )
+                    if fallback_result.cost < result.cost:
+                        next_A = fallback_A
+                        result = fallback_result
+                        used_strict = fallback_strict
+                        optimizer_seed_kind = "warm_start_fallback"
             restart_used = False
-            accepted_kind = "first_step_cg_lm" if use_first_step_cg else "warm_start"
+            accepted_kind = (
+                "first_step_cg_lm" if use_first_step_cg else optimizer_seed_kind
+            )
             accepted_trial = -1
             trials = 0
+
+            if (
+                result.cost > active_accept_cost
+                and not use_first_step_threshold
+                and dense_rescue_primary is not None
+                and dense_rescue_strict is not None
+            ):
+                matrix_free_cost = float(result.cost)
+                rescue_A, rescue_result, rescue_strict, rescue_seconds = (
+                    fit_fixed_target(
+                        next_A,
+                        target,
+                        dense_rescue_primary,
+                        dense_rescue_strict,
+                        use_strict_retry=args.strict_retry,
+                    )
+                )
+                fit_seconds += rescue_seconds
+                append_csv(
+                    backend_rescues_path,
+                    {
+                        "step": step,
+                        "time": args.base_time + step * protocol.delta_t,
+                        "source_backend": "matrix-free-lm",
+                        "rescue_backend": "dense-lm",
+                        "source_cost": matrix_free_cost,
+                        "rescue_cost": rescue_result.cost,
+                        "accept_cost": active_accept_cost,
+                        "rescue_status": rescue_result.status,
+                        "rescue_evaluations": optimizer_evaluation_count(
+                            rescue_result
+                        ),
+                        "used_strict_retry": rescue_strict,
+                        "seconds": rescue_seconds,
+                        "accepted": rescue_result.cost <= active_accept_cost,
+                    },
+                )
+                print(
+                    f"backend-rescue step={step} matrix-free-cost="
+                    f"{matrix_free_cost:.2e} dense-cost={rescue_result.cost:.2e} "
+                    f"status={rescue_result.status}",
+                    flush=True,
+                )
+                if rescue_result.cost < result.cost:
+                    next_A, result = rescue_A, rescue_result
+                    used_strict = rescue_strict
+                    accepted_kind = "matrix_free_dense_rescue"
+                if rescue_result.cost <= active_accept_cost:
+                    rescue_events += 1
 
             if result.cost > active_accept_cost:
                 for kind, amplitude, trial, seed, seed_distance in distant_seeds(
@@ -1144,6 +2166,17 @@ def main() -> None:
                         active_primary,
                         active_strict,
                         use_strict_retry=args.strict_retry,
+                    )
+                    append_optimizer_history(
+                        matrix_free_history_path,
+                        horizontal_cg_history_path,
+                        step=step,
+                        attempt=(
+                            f"restart_{kind}_{trial}_strict"
+                            if candidate_strict
+                            else f"restart_{kind}_{trial}"
+                        ),
+                        result=candidate_result,
                     )
                     trials += 1
                     append_csv(
@@ -1163,7 +2196,9 @@ def main() -> None:
                             "cost": candidate_result.cost,
                             "target_residual": candidate_result.residual_norm,
                             "status": candidate_result.status,
-                            "evaluations": len(candidate_result.history),
+                            "evaluations": optimizer_evaluation_count(
+                                candidate_result
+                            ),
                             "used_strict_retry": candidate_strict,
                             "seconds": seconds,
                             "accept_cost": active_accept_cost,
@@ -1186,38 +2221,104 @@ def main() -> None:
                     if candidate_result.cost < result.cost:
                         next_A, result = candidate_A, candidate_result
 
+            optimizer_internal_cost = float(result.cost)
+            acceptance_r = None
+            acceptance_r_info = None
+            if args.dense_verify_acceptance:
+                acceptance_r, acceptance_r_info = optimizer_right_fixed_point(
+                    next_A,
+                    "dense",
+                )
+                acceptance_difference = (
+                    block_rdm(next_A, protocol.block_length, acceptance_r) - target
+                )
+                verified_cost = 0.5 * float(
+                    np.vdot(acceptance_difference, acceptance_difference).real
+                )
+                result = replace(
+                    result,
+                    cost=verified_cost,
+                    residual_norm=float(np.sqrt(2.0 * verified_cost)),
+                )
+
             if result.cost > active_accept_cost:
                 status = "failed_fixed_target_multistart"
+                failed_r, failed_r_info = optimizer_right_fixed_point(
+                    next_A,
+                    protocol.target_source_fixed_point_solver,
+                )
+                failed_r_info_json = fixed_point_info_json(failed_r_info)
+                failed_rdm = block_rdm(
+                    next_A,
+                    protocol.block_length,
+                    failed_r,
+                )
+                failed_cost_recomputed = 0.5 * float(
+                    np.linalg.norm(failed_rdm - target) ** 2
+                )
+                failed_stem = f"failed_best_step_{step:06d}"
+                failed_tensor_path = output / f"{failed_stem}.npy"
+                failed_fixed_point_path = output / f"{failed_stem}_rfp.npy"
+                failed_target_path = output / f"failed_target_step_{step:06d}.npy"
+                atomic_npy(failed_tensor_path, next_A)
+                atomic_npy(failed_fixed_point_path, failed_r)
+                atomic_npy(failed_target_path, target)
                 metadata["failure"] = {
                     "attempted_step": step,
                     "time": args.base_time + step * protocol.delta_t,
                     "accept_cost": active_accept_cost,
                     "warm_start_cost": warm_cost,
+                    "optimizer_seed_kind": optimizer_seed_kind,
+                    "warm_seed_cost": warm_seed_cost,
+                    "predictor_seed_cost": predictor_seed_cost,
                     "best_cost": result.cost,
+                    "best_optimizer_internal_cost": optimizer_internal_cost,
                     "best_target_residual": result.residual_norm,
+                    "best_cost_recomputed": failed_cost_recomputed,
+                    "best_tensor_store": failed_tensor_path.name,
+                    "best_right_fixed_point_store": failed_fixed_point_path.name,
+                    "target_store": failed_target_path.name,
+                    "best_optimizer_status": result.status,
+                    "best_optimizer_evaluations": optimizer_evaluation_count(result),
+                    "best_right_fixed_point_info": failed_r_info_json,
+                    "best_left_canonical_error": canonical_errors(next_A)[
+                        "left_canonical_error"
+                    ],
                     "restart_trials": trials,
                 }
                 break
 
             A = next_A
-            A_r, A_r_info = optimizer_right_fixed_point(
-                A,
-                protocol.target_source_fixed_point_solver,
-            )
+            if acceptance_r is not None and acceptance_r_info is not None:
+                A_r, A_r_info = acceptance_r, acceptance_r_info
+            else:
+                A_r, A_r_info = optimizer_right_fixed_point(
+                    A,
+                    protocol.target_source_fixed_point_solver,
+                )
             A_r_info_json = fixed_point_info_json(A_r_info)
             step_seconds = time.perf_counter() - started
             states[step] = A
             right_fixed_points[step] = A_r
             completed = step
             cumulative_seconds += step_seconds
-            append_csv(
-                steps_path,
-                {
+            runtime_diagnostic = runtime_promotion_diagnostic(
+                step_seconds,
+                preceding_step_seconds,
+                factor=args.runtime_promotion_factor,
+                window=args.runtime_promotion_window,
+                minimum_seconds=args.runtime_promotion_minimum_seconds,
+            )
+            step_record = {
                     "step": step,
                     "time": args.base_time + step * protocol.delta_t,
                     "target_source": target_source_kind,
                     "target_source_bond_dimension": target_source.shape[1],
                     "warm_start_cost": warm_cost,
+                    "optimizer_seed_kind": optimizer_seed_kind,
+                    "warm_seed_cost": warm_seed_cost,
+                    "predictor_seed_cost": predictor_seed_cost,
+                    "predictor_fallback_used": predictor_fallback_used,
                     "first_step_cg_used": use_first_step_cg,
                     "first_step_cg_cost": (
                         float("nan")
@@ -1237,14 +2338,16 @@ def main() -> None:
                     "first_step_cg_evaluations": (
                         0
                         if first_step_cg_result is None
-                        else len(first_step_cg_result.history)
+                        else optimizer_evaluation_count(first_step_cg_result)
                     ),
                     "first_step_cg_seconds": first_step_cg_seconds,
                     "optimizer_cost": result.cost,
+                    "optimizer_internal_cost": optimizer_internal_cost,
+                    "dense_acceptance_verified": args.dense_verify_acceptance,
                     "accept_cost": active_accept_cost,
                     "target_residual": result.residual_norm,
                     "optimizer_status": result.status,
-                    "optimizer_evaluations": len(result.history),
+                    "optimizer_evaluations": optimizer_evaluation_count(result),
                     "right_fixed_point_residual": A_r_info_json["residual"],
                     "right_fixed_point_min_eigenvalue": A_r_info_json["min_eigenvalue"],
                     "warm_used_strict_retry": used_strict,
@@ -1255,8 +2358,21 @@ def main() -> None:
                     "fit_seconds_before_restarts": fit_seconds,
                     "step_seconds": step_seconds,
                     "left_canonical_error": canonical_errors(A)["left_canonical_error"],
-                },
-            )
+            }
+            if runtime_diagnostic is not None:
+                step_record.update(
+                    {
+                        "runtime_reference_median_seconds": (
+                            runtime_diagnostic["reference_median_seconds"]
+                        ),
+                        "runtime_ratio_to_reference": runtime_diagnostic["ratio"],
+                        "runtime_promotion_triggered": runtime_diagnostic[
+                            "triggered"
+                        ],
+                    }
+                )
+            append_csv(steps_path, step_record)
+            preceding_step_seconds.append(step_seconds)
             if step % args.checkpoint_every == 0 or restart_used or step == args.steps:
                 states.flush()
                 right_fixed_points.flush()
@@ -1277,6 +2393,69 @@ def main() -> None:
                     f"wall={step_seconds:.2f}s",
                     flush=True,
                 )
+            if (
+                runtime_diagnostic is not None
+                and runtime_diagnostic["triggered"]
+            ):
+                status = "promote_requested_by_runtime"
+                metadata["runtime_promotion"] = {
+                    "step": step,
+                    "time": args.base_time + step * protocol.delta_t,
+                    "step_seconds": step_seconds,
+                    **runtime_diagnostic,
+                }
+                states.flush()
+                right_fixed_points.flush()
+                metadata.update(
+                    {
+                        "status": status,
+                        "updated_at": utc_now(),
+                        "completed_steps": completed,
+                        "rescue_events": rescue_events,
+                        "cumulative_seconds": cumulative_seconds,
+                    }
+                )
+                atomic_json(metadata_path, metadata)
+                print(
+                    f"runtime-promotion step={step} "
+                    f"time={args.base_time + step * protocol.delta_t:.3f} "
+                    f"wall={step_seconds:.2f}s "
+                    f"reference={runtime_diagnostic['reference_median_seconds']:.2f}s "
+                    f"ratio={runtime_diagnostic['ratio']:.2f}",
+                    flush=True,
+                )
+                break
+            if step_runtime_limit_exceeded(
+                step_seconds,
+                args.maximum_step_seconds,
+            ):
+                status = "paused_by_step_runtime_limit"
+                metadata["step_runtime_limit"] = {
+                    "step": step,
+                    "time": args.base_time + step * protocol.delta_t,
+                    "step_seconds": step_seconds,
+                    "maximum_step_seconds": args.maximum_step_seconds,
+                }
+                states.flush()
+                right_fixed_points.flush()
+                metadata.update(
+                    {
+                        "status": status,
+                        "updated_at": utc_now(),
+                        "completed_steps": completed,
+                        "rescue_events": rescue_events,
+                        "cumulative_seconds": cumulative_seconds,
+                    }
+                )
+                atomic_json(metadata_path, metadata)
+                print(
+                    f"step-runtime-limit step={step} "
+                    f"time={args.base_time + step * protocol.delta_t:.3f} "
+                    f"wall={step_seconds:.2f}s "
+                    f"limit={args.maximum_step_seconds:.2f}s",
+                    flush=True,
+                )
+                break
     except KeyboardInterrupt:
         status = "paused_by_keyboard_interrupt"
     finally:

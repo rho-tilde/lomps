@@ -11,6 +11,8 @@ The core implementation provides:
 - finite-block reduced density matrices and analytic directional derivatives;
 - the true MPS gauge tangent and its orthogonal complement;
 - gauge-orthogonal Levenberg--Marquardt updates with polar retraction;
+- an optional basis-free, Jacobian-free horizontal LM backend whose damped
+  Gauss--Newton equations are solved by adaptive inner CG or rectangular LSMR;
 - reproducible dense fixed-point solves by default, with an explicit fast
   ARPACK option for exploratory runs;
 - named integrable and non-integrable second-order Ising quench protocols, with
@@ -57,6 +59,56 @@ lomps-run \
 
 Create `runs/d10/PAUSE` to pause between timesteps. Remove it and append
 `--resume` to the same command to continue.
+
+For `L=6,D=40` and larger bond dimensions, where constructing the horizontal
+basis and dense RDM Jacobian becomes the bottleneck, select the matrix-free
+backend explicitly:
+
+```bash
+lomps-run \
+  --optimizer matrix-free-lm \
+  --matrix-free-krylov-initial-iterations 64 \
+  --matrix-free-krylov-max-iterations 256 \
+  --matrix-free-krylov-preconditioner right-fixed-point-stiefel \
+  --initial-A data/your_l6_tensor.npy \
+  --output-dir runs/l6_d40_matrix_free \
+  --bond-dimension 40 \
+  --block-length 6 \
+  --steps 100
+```
+
+This backend applies `J` and `J^dagger` through direct small-window
+prefix/suffix contractions. It constructs neither the Jacobian nor a doubled
+MPS ring. Product trees are cached for the lifetime of each outer LM
+evaluation and reused by every JVP/VJP. At `D=40`, its default `auto` response
+policy factors the stabilized
+fixed-point response operator once per outer LM iteration and reuses that
+factor across all JVPs/VJPs. The default 128 MB storage ceiling automatically
+returns to matrix-free GMRES at larger `D`; it can be changed with
+`--matrix-free-fixed-point-response-max-mb`. Krylov budgets, tolerances, and
+operator counts are saved in
+`matrix_free_optimizer_iterations.csv`; ordinary checkpoints and resume
+semantics are unchanged. Add `--matrix-free-verbose` to stream the same outer
+iteration diagnostics to the run log. Dense LM remains the default and is
+preferable for the established `L=4,D=12` and current `L=5,D=20/21` regimes.
+Its large-`D` path also supports a Grassmann tangent slice, Hermitian residual
+packing, one stabilized dense-LU fixed-point response factorization per
+Jacobian evaluation, and deterministic parallel tangent batches through
+`--lm-tangent-slice grassmann --lm-rdm-vectorization hermitian
+--lm-jacobian-response-solver dense-lu --lm-jacobian-workers N`.
+
+CG remains the recommended matrix-free linear solver for the physical
+`L=6,D=40` quench. The optional `right-fixed-point-stiefel` preconditioner
+applies a positive right-fixed-point metric preconditioner on the Stiefel
+tangent, leaves harmless gauge components inside the damped inner solve, and
+exactly gauge-projects the completed LM step. It reduced the frozen physical
+benchmark from 3,584 to 1,531 normal products; it is not enabled globally
+because it provides no benefit in the small `L=4,D=12` regime. Rectangular
+LSMR is available with
+`--matrix-free-krylov-solver lsmr`; it avoids normal equations but has not yet
+reduced the physical-target contraction count. Naive previous-solution
+recycling is also available for controlled experiments but remains disabled
+by default because it did not improve the benchmark.
 
 For weakly entangled starts at large target bond dimension, see
 [docs/adaptive_bond_runs.md](docs/adaptive_bond_runs.md). The optional
