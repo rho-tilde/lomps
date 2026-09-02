@@ -32,6 +32,7 @@ RESUMABLE_STATUSES = {
     "paused_by_PAUSE_file",
     "paused_by_step_limit",
     "paused_by_run_time_limit",
+    "paused_by_step_runtime_limit",
     "paused_by_keyboard_interrupt",
 }
 

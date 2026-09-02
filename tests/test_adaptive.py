@@ -20,6 +20,7 @@ from lomps.adaptive import (
 class AdaptiveBondDimensionTests(unittest.TestCase):
     def test_pause_statuses_are_resumable_not_promotable(self) -> None:
         self.assertIn("paused_by_PAUSE_file", RESUMABLE_STATUSES)
+        self.assertIn("paused_by_step_runtime_limit", RESUMABLE_STATUSES)
         self.assertIn("paused_by_keyboard_interrupt", RESUMABLE_STATUSES)
 
     def test_runtime_request_is_promotable(self) -> None:
