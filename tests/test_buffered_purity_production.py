@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 
 import numpy as np
@@ -43,6 +44,19 @@ def _result(
 
 
 class ProductionPurityClassificationTests(unittest.TestCase):
+    def test_purity_history_preserves_terminal_tensor_on_failure(self) -> None:
+        result = _result(
+            "maximum_iterations",
+            accepted_steps=2,
+            gradient=1e-4,
+            relative_drop=1e-6,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "history.npz"
+            PRODUCTION.atomic_purity_history(path, result)
+            with np.load(path) as saved:
+                np.testing.assert_array_equal(saved["W"], result.W)
+
     def test_production_uses_a_strict_fixed_rho4_fibre(self) -> None:
         options = PRODUCTION.purity_options(
             SimpleNamespace(

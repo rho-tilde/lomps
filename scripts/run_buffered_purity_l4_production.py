@@ -119,6 +119,7 @@ def atomic_purity_history(path: Path, result: BufferedPurityResult) -> None:
         for name in names
     }
     payload.update(
+        W=np.asarray(result.W),
         status=np.asarray(result.status),
         accepted_steps=np.asarray(result.accepted_steps, dtype=np.int64),
         initial_primary_cost=np.asarray(result.initial_primary_cost),
