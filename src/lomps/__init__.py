@@ -1,6 +1,13 @@
 """LOMPS: local optimization of matrix-product states."""
 
 from .canonical import canonical_errors, random_left_canonical
+from .buffered_purity import (
+    BufferedPurityGradient,
+    BufferedPurityOptions,
+    BufferedPurityResult,
+    density_matrix_purity,
+    minimize_buffered_purity,
+)
 from .dimensions import (
     minimum_bond_dimension_for_ti_rdm,
     quotient_tangent_dimension,
@@ -46,6 +53,9 @@ from .rdm import block_rdm
 from .tensor_io import TensorLoadInfo, load_tensor_file
 
 __all__ = [
+    "BufferedPurityGradient",
+    "BufferedPurityOptions",
+    "BufferedPurityResult",
     "LMOptions",
     "LMResult",
     "MatrixFreeLMOptions",
@@ -62,8 +72,10 @@ __all__ = [
     "block_rdm",
     "canonical_errors",
     "coerce_initial_tensor",
+    "density_matrix_purity",
     "lift_left_canonical_seed",
     "minimum_bond_dimension_for_ti_rdm",
+    "minimize_buffered_purity",
     "optimizer_right_fixed_point",
     "optimize_tensor",
     "optimize_fixed_target_matrix_free_lm",

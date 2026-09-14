@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "protocol": "nonintegrable_ising_yplus",
+  "block_length": 4,
+  "bond_dimension": 12,
+  "delta_t": 0.001,
+  "start_time": 1.5,
+  "source_trajectory": "data/nonintegrable_d12_trajectory",
+  "source_accuracy": {
+    "accepted_cost_ceiling": 3e-16,
+    "optimizer_gradient_tolerance": 1e-11
+  },
+  "files": {
+    "previous_t1p499_D12.npy": {
+      "physical_time": 1.499,
+      "sha256": "657504f714e775ee8ed06df30d43c40fb2e232ca3798b8252a59fac46e8af1ca"
+    },
+    "anchor_t1p500_D12.npy": {
+      "physical_time": 1.5,
+      "sha256": "127a87da9aee3200b8de88001a6f25ea2208abe5df8829572ab2b938d85ad6b7"
+    }
+  },
+  "anchor_input_exact_cost": 3.376865235082507e-17,
+  "note": "The anchor is refitted to the production internal target before the control and purity branches diverge."
+}

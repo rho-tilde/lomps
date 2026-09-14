@@ -24,6 +24,8 @@ The core implementation provides:
 - optional segmented trajectories that promote the bond dimension only after
   the current manifold cannot accept its next update;
 - resumable evolution with fixed-target multistart rescue and detailed logs.
+- optional post-fit minimum-purity selection on the four-site Trotter buffer,
+  using an adjoint ``rho_{L+4}`` gradient without constructing its Jacobian.
 
 ## Installation
 
@@ -119,6 +121,58 @@ update.
 The dense RDM Jacobian uses bounded tangent and physical-output batches. See
 [docs/large_jacobian_blas_safety.md](docs/large_jacobian_blas_safety.md) for
 the native BLAS failure this avoids and the large-`D` regression coverage.
+
+## Buffered maximum-entropy selection
+
+The experimental buffered-purity optimizer keeps the ordinary LOMPS fit
+
+```text
+1/2 ||rho_L(A) - rho_target||_F^2 <= epsilon
+```
+
+as a hard constraint and lowers ``Tr(rho_{L+4}(A)^2)`` inside that feasible
+set.  It uses the explicit ``rho_L`` Jacobian only to project away visible
+directions.  The larger-window purity gradient is a direct adjoint
+contraction, so no ``rho_{L+4}`` Jacobian is formed.  Each secondary step is
+LM-reprojected and then checked against the exact nonlinear primary cost.
+There is deliberately no tensor-continuity penalty.
+
+Run the small mechanism check and the saved ``L=4,D=12`` trajectory benchmark:
+
+```bash
+python scripts/benchmark_buffered_purity.py l2-smoke \
+  --output-dir benchmarks/buffered_purity_l2
+
+python scripts/benchmark_buffered_purity.py l4-trajectory \
+  --output-dir benchmarks/buffered_purity_l4
+
+python scripts/benchmark_buffered_purity_l4_short_trajectory.py \
+  --output-dir benchmarks/buffered_purity_l4_short \
+  --start-time 5.0 --steps 10
+```
+
+For a genuine consecutive branch, including converged refinement of the
+starting anchor and every subsequent physical step, use:
+
+```bash
+scripts/run_buffered_purity_l4_converged_t5.sh
+scripts/status_buffered_purity_l4_converged_t5.sh
+```
+
+The production-style runner checkpoints after every completed physical step
+and accepts `--resume`.  The cluster-portable runner
+`scripts/run_buffered_purity_l4_production.py` distinguishes formal
+projected-gradient convergence, a machine-precision line-search floor after a
+required amount of fibre work, and a fixed tracking budget.  It records the
+classification rather than calling all three "converged".  Its nonlinear
+reprojection can target a tighter internal cost than the hard scientific
+acceptance ceiling, preventing the secondary search from being trapped at
+that ceiling.  Full searches can be spaced with `--purity-full-every`, while
+`--purity-tracking-iterations` applies a substantial fixed number of accepted
+updates on every intervening physical step.
+
+See [docs/buffered_purity_benchmark_20260911.md](docs/buffered_purity_benchmark_20260911.md)
+for the initial numerical audit.
 
 Run the `L=4,D=12` integrable TFIM reference quench with the committed VUMPS
 ground-state tensor:
