@@ -159,6 +159,37 @@ class BufferedPurityTests(unittest.TestCase):
         )
         self.assertEqual(result.history[0].projection_evaluations, 0)
 
+    def test_warm_started_line_search_reduces_trial_work(self) -> None:
+        A, _ = random_left_canonical(d=2, D=3, seed=999)
+        target = block_rdm(A, 2)
+
+        results = []
+        for warm_start in (False, True):
+            _, result = minimize_buffered_purity(
+                A,
+                target,
+                2,
+                BufferedPurityOptions(
+                    primary_cost_tolerance=1e-10,
+                    projection_cost_tolerance=1e-12,
+                    max_iterations=4,
+                    initial_step=50.0,
+                    minimum_step=1e-8,
+                    direction_scaling="gradient",
+                    warm_start_line_search=warm_start,
+                    verbose=False,
+                ),
+            )
+            results.append(result)
+
+        cold, warm = results
+        self.assertEqual(cold.accepted_steps, warm.accepted_steps)
+        self.assertAlmostEqual(cold.purity, warm.purity, places=14)
+        self.assertLess(
+            sum(record.line_search_trials for record in warm.history),
+            sum(record.line_search_trials for record in cold.history),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -161,15 +161,16 @@ scripts/status_buffered_purity_l4_converged_t5.sh
 
 The production-style runner checkpoints after every completed physical step
 and accepts `--resume`.  The cluster-portable runner
-`scripts/run_buffered_purity_l4_production.py` distinguishes formal
-projected-gradient convergence, a machine-precision line-search floor after a
-required amount of fibre work, and a fixed tracking budget.  It records the
-classification rather than calling all three "converged".  Its nonlinear
-reprojection can target a tighter internal cost than the hard scientific
-acceptance ceiling, preventing the secondary search from being trapped at
-that ceiling.  Full searches can be spaced with `--purity-full-every`, while
-`--purity-tracking-iterations` applies a substantial fixed number of accepted
-updates on every intervening physical step.
+`scripts/run_buffered_purity_l4_production.py` first obtains the best ordinary
+rho4 fit, freezes that attained rho4, and performs the secondary optimization
+on its fixed-rho4 fibre.  It distinguishes formal projected-gradient
+convergence, a machine-precision line-search floor, and exhaustion of a
+tracking budget; a tracking budget is a maximum rather than a quota.  The
+warm-started line search reuses the previous accepted scale, and every trial is
+nonlinearly reprojected to the frozen rho4 within `--fibre-cost-target`.  The
+physical target cost is still checked independently against `--accept-cost`.
+Full searches can be spaced with `--purity-full-every`, while
+`--purity-tracking-iterations` caps the work on intervening physical steps.
 
 See [docs/buffered_purity_benchmark_20260911.md](docs/buffered_purity_benchmark_20260911.md)
 for the initial numerical audit.

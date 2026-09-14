@@ -128,6 +128,8 @@ class BufferedPurityOptions:
     primary_cost_tolerance: float = 1e-12
     max_iterations: int = 8
     initial_step: float = 1e-2
+    warm_start_line_search: bool = False
+    line_search_growth: float = 2.0
     direction_scaling: PurityDirectionScaling = "unit"
     minimum_step: float = 1e-8
     armijo_c1: float = 1e-4
@@ -160,6 +162,7 @@ class BufferedPurityRecord:
     visible_rank: int
     tangent_dimension: int
     trial_step: float
+    line_search_trials: int
     accepted: bool
     candidate_primary_cost: float
     candidate_purity: float
@@ -205,6 +208,8 @@ class BufferedPurityOptimizer:
             raise ValueError("line-search steps must be positive")
         if self.options.minimum_step > self.options.initial_step:
             raise ValueError("minimum_step cannot exceed initial_step")
+        if self.options.line_search_growth < 1.0:
+            raise ValueError("line_search_growth must be at least one")
         if not 0 < self.options.armijo_c1 < 1:
             raise ValueError("armijo_c1 must lie strictly between zero and one")
         if self.options.direction_scaling not in {"unit", "gradient"}:
@@ -375,6 +380,7 @@ class BufferedPurityOptimizer:
         accepted_steps = 0
         small_relative_drop_streak = 0
         status = "maximum_iterations"
+        line_search_step = self.options.initial_step
 
         for iteration in range(self.options.max_iterations + 1):
             started = time.perf_counter()
@@ -430,8 +436,14 @@ class BufferedPurityOptimizer:
             direction = np.tensordot(
                 direction_coefficients, primary.basis, axes=(0, 0)
             )
-            alpha = self.options.initial_step
+            alpha = (
+                line_search_step
+                if self.options.warm_start_line_search
+                else self.options.initial_step
+            )
             accepted = False
+            line_search_trials = 0
+            last_trial_step = 0.0
             candidate_primary_cost = primary.cost
             candidate_purity = purity.purity
             raw_candidate_primary_cost = primary.cost
@@ -439,6 +451,8 @@ class BufferedPurityOptimizer:
             projection_evaluations = 0
             candidate = W
             while alpha >= self.options.minimum_step:
+                line_search_trials += 1
+                last_trial_step = alpha
                 trial = polar_retraction(W + alpha * direction)
                 raw_trial_cost = self._trial_primary_cost(trial, rho_target)
                 trial, trial_projection_status, trial_projection_evaluations = (
@@ -480,7 +494,8 @@ class BufferedPurityOptimizer:
                     linearized_primary_change_norm=linearized_change,
                     visible_rank=visible_rank,
                     tangent_dimension=primary.jacobian.shape[1],
-                    trial_step=alpha if accepted else 0.0,
+                    trial_step=alpha if accepted else last_trial_step,
+                    line_search_trials=line_search_trials,
                     accepted=accepted,
                     candidate_primary_cost=candidate_primary_cost,
                     candidate_purity=candidate_purity,
@@ -497,7 +512,8 @@ class BufferedPurityOptimizer:
                     f"P={purity.purity:.12e} "
                     f"|g_null|={null_gradient_norm:.3e} "
                     f"rank={visible_rank}/{primary.jacobian.shape[1]} "
-                    f"alpha={alpha if accepted else 0.0:.3e} "
+                    f"alpha={alpha if accepted else last_trial_step:.3e} "
+                    f"trials={line_search_trials} "
                     f"accepted={accepted}",
                     flush=True,
                 )
@@ -517,6 +533,14 @@ class BufferedPurityOptimizer:
             final_primary_cost = candidate_primary_cost
             final_purity = candidate_purity
             accepted_steps += 1
+            if self.options.warm_start_line_search:
+                line_search_step = min(
+                    self.options.initial_step,
+                    max(
+                        self.options.minimum_step,
+                        alpha * self.options.line_search_growth,
+                    ),
+                )
 
         return BufferedPurityResult(
             W=W,

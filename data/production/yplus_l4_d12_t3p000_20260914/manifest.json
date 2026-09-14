@@ -1,0 +1,25 @@
+{
+  "anchor_input_exact_cost": 6.5200046930125e-17,
+  "block_length": 4,
+  "bond_dimension": 12,
+  "delta_t": 0.001,
+  "files": {
+    "anchor_t3p000_D12.npy": {
+      "physical_time": 3.0,
+      "sha256": "fa3ca25dec93ca94e1b5735941f5432923e6f1bcc63ac1a6b2a7ad8d36be79fc"
+    },
+    "previous_t2p999_D12.npy": {
+      "physical_time": 2.999,
+      "sha256": "d829feaa1af19ef2338a019d20fb48f5713eeea91a033f14c7c51ea0baf5b52f"
+    }
+  },
+  "note": "The anchor is refitted to the production internal target before the fixed-rho4 fibre search.",
+  "protocol": "nonintegrable_ising_yplus",
+  "schema_version": 1,
+  "source_accuracy": {
+    "accepted_cost_ceiling": 3e-16,
+    "optimizer_gradient_tolerance": 1e-11
+  },
+  "source_trajectory": "data/nonintegrable_d12_trajectory",
+  "start_time": 3.0
+}

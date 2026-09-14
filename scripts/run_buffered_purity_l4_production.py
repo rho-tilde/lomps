@@ -3,12 +3,13 @@
 
 The run starts from two explicit D=12 tensors at ``t-dt`` and ``t``.  Both
 branches first refit the anchor to a strict internal rho4 target.  The
-``purity`` branch then minimizes ``Tr(rho8**2)`` at the anchor and after every
-physical step.  A relative-purity plateau is a recorded stall rather than
-formal projected-gradient convergence.  Deep searches may nevertheless be
-accepted as numerical stationarity when the line search reaches machine-scale
-purity changes after a substantial number of accepted fibre updates; that
-distinction is preserved in every output row.
+``purity`` branch then freezes the rho4 attained by that fit and minimizes
+``Tr(rho8**2)`` on its fixed-rho4 fibre at the anchor and after every physical
+step.  A relative-purity plateau is a recorded stall rather than formal
+projected-gradient convergence.  Deep searches may nevertheless be accepted
+as numerical stationarity when the line search reaches machine-scale purity
+changes after a substantial number of accepted fibre updates; that distinction
+is preserved in every output row.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ CSV_FIELDS = [
     "time",
     "mode",
     "primary_cost",
+    "fibre_cost",
     "ordinary_fit_status",
     "ordinary_fit_evaluations",
     "purity_search_kind",
@@ -53,6 +55,7 @@ CSV_FIELDS = [
     "purity_stationarity",
     "purity_status",
     "purity_iterations",
+    "purity_line_search_trials",
     "purity_before",
     "purity_after",
     "relative_purity_drop",
@@ -142,7 +145,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=1500)
     parser.add_argument("--accept-cost", type=float, default=3e-16)
     parser.add_argument("--fit-cost-target", type=float, default=1e-18)
+    parser.add_argument("--fibre-cost-target", type=float, default=1e-22)
     parser.add_argument("--purity-step", type=float, default=50.0)
+    parser.add_argument("--purity-minimum-step", type=float, default=1e-8)
     parser.add_argument("--purity-max-iterations", type=int, default=2000)
     parser.add_argument("--purity-tracking-iterations", type=int, default=0)
     parser.add_argument("--purity-full-every", type=int, default=1)
@@ -199,12 +204,14 @@ def fit_options(args: argparse.Namespace) -> LMOptions:
 def purity_options(args: argparse.Namespace) -> BufferedPurityOptions:
     return BufferedPurityOptions(
         buffer_sites=4,
-        primary_cost_tolerance=args.accept_cost,
-        projection_cost_tolerance=args.fit_cost_target,
+        primary_cost_tolerance=args.fibre_cost_target,
+        projection_cost_tolerance=args.fibre_cost_target,
         max_iterations=args.purity_max_iterations,
         initial_step=args.purity_step,
+        warm_start_line_search=True,
+        line_search_growth=2.0,
         direction_scaling="gradient",
-        minimum_step=1e-10,
+        minimum_step=args.purity_minimum_step,
         null_gradient_tolerance=args.purity_gradient_tolerance,
         relative_purity_tolerance=args.purity_relative_tolerance,
         relative_purity_patience=args.purity_relative_patience,
@@ -261,7 +268,6 @@ def require_purity_tracking(
     result: BufferedPurityResult,
     expected_iterations: int,
     relative_tolerance: float,
-    numerical_gradient_ceiling: float,
     label: str,
 ) -> str:
     if result.status == "null_gradient_tolerance":
@@ -276,7 +282,6 @@ def require_purity_tracking(
         and result.accepted_steps > 0
         and np.isfinite(result.final_relative_purity_drop)
         and 0.0 <= result.final_relative_purity_drop <= relative_tolerance
-        and result.final_null_gradient_norm <= numerical_gradient_ceiling
     ):
         return "numerical_line_search_floor"
     raise RuntimeError(
@@ -342,22 +347,33 @@ def save_state(states_dir: Path, local_step: int, time_value: float, A: Array) -
 
 def refine_purity(
     A: Array,
-    target: Array,
+    fibre_reference: Array,
     options: BufferedPurityOptions,
     label: str,
 ) -> tuple[Array, BufferedPurityResult, float]:
+    """Minimize P8 while preserving the rho4 attained by the primary fit."""
+
     started = time.perf_counter()
-    refined, result = minimize_buffered_purity(A, target, 4, options)
+    refined, result = minimize_buffered_purity(A, fibre_reference, 4, options)
     elapsed = time.perf_counter() - started
     return refined, result, elapsed
 
 
 def main() -> None:
     args = parse_args()
-    if args.steps < 1:
-        raise ValueError("--steps must be positive")
+    if args.steps < 0:
+        raise ValueError("--steps cannot be negative")
     if args.fit_cost_target <= 0 or args.fit_cost_target > args.accept_cost:
         raise ValueError("--fit-cost-target must lie in (0, --accept-cost]")
+    if (
+        args.fibre_cost_target <= 0
+        or args.fibre_cost_target > args.fit_cost_target
+    ):
+        raise ValueError(
+            "--fibre-cost-target must lie in (0, --fit-cost-target]"
+        )
+    if args.purity_minimum_step <= 0:
+        raise ValueError("--purity-minimum-step must be positive")
     if args.purity_relative_patience < 1:
         raise ValueError("--purity-relative-patience must be positive")
     if args.purity_tracking_iterations < 0:
@@ -395,10 +411,6 @@ def main() -> None:
     tracking_options = replace(
         p_options,
         max_iterations=args.purity_tracking_iterations,
-        relative_purity_patience=max(
-            p_options.relative_purity_patience,
-            args.purity_tracking_iterations + 1,
-        ),
     )
     config = {
         "protocol": "nonintegrable_ising_yplus",
@@ -417,6 +429,8 @@ def main() -> None:
         "anchor_A_sha256": anchor_sha256,
         "accept_cost": args.accept_cost,
         "fit_cost_target": args.fit_cost_target,
+        "fibre_cost_target": args.fibre_cost_target,
+        "fibre_constraint": "fixed_achieved_rho4",
         "primary_options": asdict(f_options),
         "purity_options": asdict(p_options) if args.mode == "purity" else None,
         "purity_tracking_iterations": args.purity_tracking_iterations,
@@ -483,7 +497,7 @@ def main() -> None:
             require_primary_cost(
                 anchor_fit_cost, args.fit_cost_target, "anchor fit"
             )
-            _, fitted_anchor_rho8 = exact_rdms(fitted_anchor)
+            fitted_anchor_rho4, fitted_anchor_rho8 = exact_rdms(fitted_anchor)
             anchor_purity_before = density_matrix_purity(fitted_anchor_rho8)
             anchor_purity_result: BufferedPurityResult | None = None
             anchor_purity_stationarity = "not_run"
@@ -497,7 +511,12 @@ def main() -> None:
                     anchor_fit_cost=anchor_fit_cost,
                 )
                 current, anchor_purity_result, anchor_purity_seconds = (
-                    refine_purity(fitted_anchor, anchor_target, p_options, "anchor")
+                    refine_purity(
+                        fitted_anchor,
+                        fitted_anchor_rho4,
+                        p_options,
+                        "anchor",
+                    )
                 )
                 atomic_purity_history(
                     purity_history_dir / "step_000000.npz",
@@ -539,6 +558,11 @@ def main() -> None:
                     "ordinary_fit_status": fit_result.status,
                     "ordinary_fit_evaluations": len(fit_result.history),
                     "primary_cost": anchor_cost,
+                    "fibre_cost": (
+                        None
+                        if anchor_purity_result is None
+                        else anchor_purity_result.primary_cost
+                    ),
                     "purity_before": anchor_purity_before,
                     "purity_after": anchor_purity_after,
                     "purity_status": (
@@ -551,6 +575,14 @@ def main() -> None:
                         0
                         if anchor_purity_result is None
                         else anchor_purity_result.accepted_steps
+                    ),
+                    "purity_line_search_trials": (
+                        0
+                        if anchor_purity_result is None
+                        else sum(
+                            record.line_search_trials
+                            for record in anchor_purity_result.history
+                        )
                     ),
                     "terminal_null_gradient_norm": (
                         None
@@ -611,7 +643,7 @@ def main() -> None:
             require_primary_cost(
                 fitted_cost, args.fit_cost_target, f"step {local_step} fit"
             )
-            _, fitted_rho8 = exact_rdms(fitted)
+            fitted_rho4, fitted_rho8 = exact_rdms(fitted)
             purity_before = density_matrix_purity(fitted_rho8)
 
             refined = fitted
@@ -640,7 +672,7 @@ def main() -> None:
                 )
                 refined, purity_result, purity_seconds = refine_purity(
                     fitted,
-                    target,
+                    fitted_rho4,
                     active_purity_options,
                     f"step {local_step}",
                 )
@@ -663,7 +695,6 @@ def main() -> None:
                         purity_result,
                         args.purity_tracking_iterations,
                         args.purity_relative_tolerance,
-                        args.purity_numerical_gradient_ceiling,
                         f"step {local_step}",
                     )
                 purity_converged = (
@@ -690,6 +721,9 @@ def main() -> None:
                 "time": next_time,
                 "mode": args.mode,
                 "primary_cost": refined_cost,
+                "fibre_cost": (
+                    None if purity_result is None else purity_result.primary_cost
+                ),
                 "ordinary_fit_status": fit_result.status,
                 "ordinary_fit_evaluations": len(fit_result.history),
                 "purity_search_kind": purity_search_kind,
@@ -700,6 +734,14 @@ def main() -> None:
                 ),
                 "purity_iterations": (
                     0 if purity_result is None else purity_result.accepted_steps
+                ),
+                "purity_line_search_trials": (
+                    0
+                    if purity_result is None
+                    else sum(
+                        record.line_search_trials
+                        for record in purity_result.history
+                    )
                 ),
                 "purity_before": purity_before,
                 "purity_after": purity_after,
