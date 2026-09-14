@@ -150,6 +150,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--purity-relative-tolerance", type=float, default=1e-12)
     parser.add_argument("--purity-relative-patience", type=int, default=10)
     parser.add_argument("--purity-minimum-full-iterations", type=int, default=200)
+    parser.add_argument(
+        "--purity-numerical-gradient-ceiling", type=float, default=1e-5
+    )
     parser.add_argument("--jacobian-workers", type=int, default=1)
     parser.add_argument("--pause-after-seconds", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
@@ -228,6 +231,7 @@ def classify_full_purity_search(
     *,
     minimum_iterations: int,
     relative_tolerance: float,
+    numerical_gradient_ceiling: float,
     label: str,
 ) -> str:
     """Require and classify projected-gradient or numerical stationarity."""
@@ -236,9 +240,12 @@ def classify_full_purity_search(
         return "projected_gradient"
     numerical_floor = (
         result.status in {"line_search_failed", "relative_purity_stall"}
-        and result.accepted_steps >= minimum_iterations
         and np.isfinite(result.final_relative_purity_drop)
         and 0.0 <= result.final_relative_purity_drop <= relative_tolerance
+        and (
+            result.accepted_steps >= minimum_iterations
+            or result.final_null_gradient_norm <= numerical_gradient_ceiling
+        )
     )
     if numerical_floor:
         return "numerical_line_search_floor"
@@ -253,15 +260,25 @@ def classify_full_purity_search(
 def require_purity_tracking(
     result: BufferedPurityResult,
     expected_iterations: int,
+    relative_tolerance: float,
+    numerical_gradient_ceiling: float,
     label: str,
-) -> None:
+) -> str:
     if result.status == "null_gradient_tolerance":
-        return
+        return "projected_gradient"
     if (
         result.status == "maximum_iterations"
         and result.accepted_steps == expected_iterations
     ):
-        return
+        return "tracking_budget"
+    if (
+        result.status in {"line_search_failed", "relative_purity_stall"}
+        and result.accepted_steps > 0
+        and np.isfinite(result.final_relative_purity_drop)
+        and 0.0 <= result.final_relative_purity_drop <= relative_tolerance
+        and result.final_null_gradient_norm <= numerical_gradient_ceiling
+    ):
+        return "numerical_line_search_floor"
     raise RuntimeError(
         f"{label}: purity tracking failed; status={result.status}, "
         f"accepted={result.accepted_steps}/{expected_iterations}, "
@@ -349,6 +366,8 @@ def main() -> None:
         raise ValueError("--purity-full-every must be positive")
     if args.purity_minimum_full_iterations < 1:
         raise ValueError("--purity-minimum-full-iterations must be positive")
+    if args.purity_numerical_gradient_ceiling <= 0:
+        raise ValueError("--purity-numerical-gradient-ceiling must be positive")
     if args.jacobian_workers < 1:
         raise ValueError("--jacobian-workers must be positive")
 
@@ -403,6 +422,9 @@ def main() -> None:
         "purity_tracking_iterations": args.purity_tracking_iterations,
         "purity_full_every": args.purity_full_every,
         "purity_minimum_full_iterations": args.purity_minimum_full_iterations,
+        "purity_numerical_gradient_ceiling": (
+            args.purity_numerical_gradient_ceiling
+        ),
         "no_continuity_penalty": True,
     }
     run_started = time.monotonic()
@@ -485,6 +507,9 @@ def main() -> None:
                     anchor_purity_result,
                     minimum_iterations=args.purity_minimum_full_iterations,
                     relative_tolerance=args.purity_relative_tolerance,
+                    numerical_gradient_ceiling=(
+                        args.purity_numerical_gradient_ceiling
+                    ),
                     label="anchor",
                 )
                 require_primary_cost(
@@ -628,18 +653,18 @@ def main() -> None:
                         purity_result,
                         minimum_iterations=args.purity_minimum_full_iterations,
                         relative_tolerance=args.purity_relative_tolerance,
+                        numerical_gradient_ceiling=(
+                            args.purity_numerical_gradient_ceiling
+                        ),
                         label=f"step {local_step}",
                     )
                 else:
-                    require_purity_tracking(
+                    purity_stationarity = require_purity_tracking(
                         purity_result,
                         args.purity_tracking_iterations,
+                        args.purity_relative_tolerance,
+                        args.purity_numerical_gradient_ceiling,
                         f"step {local_step}",
-                    )
-                    purity_stationarity = (
-                        "projected_gradient"
-                        if purity_result.status == "null_gradient_tolerance"
-                        else "tracking_budget"
                     )
                 purity_converged = (
                     purity_result.status == "null_gradient_tolerance"

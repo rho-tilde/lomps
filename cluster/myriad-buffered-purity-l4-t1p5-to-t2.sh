@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-# Paired production comparison from the same high-accuracy Y+ L=4,D=12
+# Paired 10-hour comparison from the same high-accuracy Y+ L=4,D=12.
 # anchor: task 1 is the primary-only control, task 2 adds substantial P8 search.
 
 #$ -N lomps-p8-l4
@@ -22,7 +22,7 @@ set -euo pipefail
 readonly LOMPS_ROOT=/home/ucancwi/Scratch/lomps-buffered-purity-20260914
 readonly PYTHON=/home/ucancwi/Scratch/lomps-acfc096/.conda-py312-exact/bin/python
 readonly INPUT_ROOT="$LOMPS_ROOT/data/production/yplus_l4_d12_t1p500_20260914"
-readonly OUTPUT_ROOT=/home/ucancwi/Scratch/lomps-jobs/runs/buffered_purity_l4_20260914
+readonly OUTPUT_ROOT=/home/ucancwi/Scratch/lomps-jobs/runs/buffered_purity_l4_t1p5_to_t2_20260914
 readonly PAUSE_AFTER_SECONDS=36000
 readonly EXPECTED_PREVIOUS_SHA256=657504f714e775ee8ed06df30d43c40fb2e232ca3798b8252a59fac46e8af1ca
 readonly EXPECTED_ANCHOR_SHA256=127a87da9aee3200b8de88001a6f25ea2208abe5df8829572ab2b938d85ad6b7
@@ -33,7 +33,7 @@ case "${SGE_TASK_ID:?}" in
   *) printf 'Unexpected SGE_TASK_ID=%s\n' "$SGE_TASK_ID" >&2; exit 2 ;;
 esac
 
-readonly RUN_DIR="$OUTPUT_ROOT/${MODE}_L4_D12_t1p500_to_t3p000"
+readonly RUN_DIR="$OUTPUT_ROOT/${MODE}_L4_D12_t1p500_to_t2p000"
 readonly ENVIRONMENT_RECORD="${RUN_DIR}.cluster_environment_job_${JOB_ID}_task_${SGE_TASK_ID}.txt"
 
 module purge
@@ -72,17 +72,18 @@ args=(
   --anchor-A "$INPUT_ROOT/anchor_t1p500_D12.npy"
   --mode "$MODE"
   --start-time 1.5
-  --steps 1500
+  --steps 500
   --accept-cost 3e-16
   --fit-cost-target 1e-17
   --purity-step 50
   --purity-max-iterations 2000
-  --purity-tracking-iterations 20
-  --purity-full-every 750
+  --purity-tracking-iterations 64
+  --purity-full-every 250
   --purity-gradient-tolerance 2e-8
   --purity-relative-tolerance 1e-12
   --purity-relative-patience 25
   --purity-minimum-full-iterations 200
+  --purity-numerical-gradient-ceiling 1e-5
   --jacobian-workers 4
   --pause-after-seconds "$PAUSE_AFTER_SECONDS"
   --quiet-purity
