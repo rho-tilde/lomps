@@ -23,8 +23,20 @@ STATE_PATTERN = re.compile(r"step_(\d+)_t([0-9]+\.[0-9]+)\.npy$")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--control-run", type=Path, required=True)
-    parser.add_argument("--purity-run", type=Path, required=True)
+    parser.add_argument(
+        "--control-run",
+        type=Path,
+        action="append",
+        required=True,
+        help="Control segment; repeat the option to stitch consecutive runs.",
+    )
+    parser.add_argument(
+        "--purity-run",
+        type=Path,
+        action="append",
+        required=True,
+        help="Purity segment; repeat the option to stitch consecutive runs.",
+    )
     parser.add_argument("--tebd-rho6", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
@@ -63,16 +75,20 @@ def tebd_translation_average(rho6: Array, length: int) -> Array:
     return normalize(0.5 * (first + second))
 
 
-def indexed_states(run: Path) -> dict[int, tuple[float, Path]]:
+def indexed_states(runs: list[Path]) -> dict[int, tuple[float, Path]]:
     result: dict[int, tuple[float, Path]] = {}
-    for path in sorted((run / "states").glob("step_*_t*.npy")):
-        match = STATE_PATTERN.match(path.name)
-        if match is None:
-            continue
-        step = int(match.group(1))
-        result[step] = (float(match.group(2)), path)
+    for run in runs:
+        for path in sorted((run / "states").glob("step_*_t*.npy")):
+            match = STATE_PATTERN.match(path.name)
+            if match is None:
+                continue
+            time_value = float(match.group(2))
+            time_index = int(round(time_value / 0.001))
+            if abs(time_index * 0.001 - time_value) > 1e-12:
+                raise ValueError(f"state time {time_value} is off the dt grid")
+            result[time_index] = (time_value, path)
     if not result:
-        raise FileNotFoundError(f"no saved states below {run / 'states'}")
+        raise FileNotFoundError(f"no saved states below {runs}")
     return result
 
 
@@ -85,18 +101,21 @@ def rdm_set(path: Path) -> dict[int, Array]:
     }
 
 
-def purity_ledger(run: Path) -> dict[int, tuple[float, float]]:
-    path = run / "steps.csv"
-    if not path.exists():
-        return {}
-    with path.open(newline="") as stream:
-        return {
-            int(row["local_step"]): (
-                float(row["purity_before"]),
-                float(row["purity_after"]),
-            )
-            for row in csv.DictReader(stream)
-        }
+def purity_ledger(runs: list[Path]) -> dict[int, tuple[float, float]]:
+    result: dict[int, tuple[float, float]] = {}
+    for run in runs:
+        path = run / "steps.csv"
+        if not path.exists():
+            continue
+        with path.open(newline="") as stream:
+            for row in csv.DictReader(stream):
+                time_value = float(row["time"])
+                time_index = int(round(time_value / 0.001))
+                result[time_index] = (
+                    float(row["purity_before"]),
+                    float(row["purity_after"]),
+                )
+    return result
 
 
 def main() -> None:
@@ -104,8 +123,8 @@ def main() -> None:
     control = indexed_states(args.control_run)
     purity = indexed_states(args.purity_run)
     steps = sorted(set(control) & set(purity))
-    if not steps or steps[0] != 0:
-        raise RuntimeError("paired trajectories do not share their t=3 anchor")
+    if not steps:
+        raise RuntimeError("paired trajectories share no saved times")
 
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -145,7 +164,8 @@ def main() -> None:
                 )
         rows.append(
             {
-                "local_step": step,
+                "trajectory_index": index,
+                "absolute_time_index": step,
                 "time": time_value,
                 "control_p8": p8["control"][index],
                 "purity_branch_p8": p8["purity"][index],
