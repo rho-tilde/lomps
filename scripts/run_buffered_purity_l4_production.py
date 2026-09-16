@@ -162,6 +162,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jacobian-workers", type=int, default=1)
     parser.add_argument("--pause-after-seconds", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--skip-anchor-purity",
+        action="store_true",
+        help=(
+            "Treat the supplied purity-mode anchor as already fibre-refined; "
+            "the rho4 anchor fit and all physical-time refinements still run."
+        ),
+    )
     parser.add_argument("--quiet-purity", action="store_true")
     return parser.parse_args()
 
@@ -387,6 +395,8 @@ def main() -> None:
         raise ValueError("--purity-numerical-gradient-ceiling must be positive")
     if args.jacobian_workers < 1:
         raise ValueError("--jacobian-workers must be positive")
+    if args.skip_anchor_purity and args.mode != "purity":
+        raise ValueError("--skip-anchor-purity requires --mode purity")
 
     protocol = replace(
         NONINTEGRABLE_ISING,
@@ -440,6 +450,7 @@ def main() -> None:
         "purity_numerical_gradient_ceiling": (
             args.purity_numerical_gradient_ceiling
         ),
+        "skip_anchor_purity": args.skip_anchor_purity,
         "no_continuity_penalty": True,
     }
     run_started = time.monotonic()
@@ -501,10 +512,14 @@ def main() -> None:
             fitted_anchor_rho4, fitted_anchor_rho8 = exact_rdms(fitted_anchor)
             anchor_purity_before = density_matrix_purity(fitted_anchor_rho8)
             anchor_purity_result: BufferedPurityResult | None = None
-            anchor_purity_stationarity = "not_run"
+            anchor_purity_stationarity = (
+                "preselected_fibre_anchor"
+                if args.mode == "purity" and args.skip_anchor_purity
+                else "not_run"
+            )
             anchor_purity_seconds = 0.0
             current = fitted_anchor
-            if args.mode == "purity":
+            if args.mode == "purity" and not args.skip_anchor_purity:
                 update_manifest(
                     manifest_path,
                     manifest,

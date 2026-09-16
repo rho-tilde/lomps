@@ -1,0 +1,21 @@
+{
+  "block_length": 4,
+  "bond_dimension": 12,
+  "buffer_sites": 4,
+  "extended_block_length": 8,
+  "fibre_constraint": "fixed achieved rho4",
+  "file": {
+    "name": "anchor_fibre_t3p000_D12.npy",
+    "physical_time": 3.0,
+    "sha256": "ad72284516cdf7ed84b9b8a0ad89325007192f1a9050e36c3d1411a2ea4fb5d1"
+  },
+  "final_fibre_cost": 7.110057925987485e-31,
+  "final_purity_rho8": 0.0200262220350326,
+  "note": "Terminal tensor from the strict 2000-step t=3 Myriad fixed-rho4 fibre search.",
+  "protocol": "nonintegrable_ising_yplus",
+  "schema_version": 1,
+  "source_history": {
+    "myriad_job_id": 339072,
+    "sha256": "f3dd7b64efaf6a32eab0aa0f04a5cf013b99e1ac9c99f0f60220543a17460b64"
+  }
+}

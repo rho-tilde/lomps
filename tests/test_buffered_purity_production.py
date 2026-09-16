@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -44,6 +46,23 @@ def _result(
 
 
 class ProductionPurityClassificationTests(unittest.TestCase):
+    def test_preselected_anchor_flag_is_available(self) -> None:
+        argv = [
+            "run_buffered_purity_l4_production.py",
+            "--output-dir",
+            "output",
+            "--previous-A",
+            "previous.npy",
+            "--anchor-A",
+            "anchor.npy",
+            "--mode",
+            "purity",
+            "--skip-anchor-purity",
+        ]
+        with patch.object(sys, "argv", argv):
+            args = PRODUCTION.parse_args()
+        self.assertTrue(args.skip_anchor_purity)
+
     def test_purity_history_preserves_terminal_tensor_on_failure(self) -> None:
         result = _result(
             "maximum_iterations",
