@@ -142,6 +142,9 @@ def main() -> None:
         branch: {length: np.empty(len(steps)) for length in (4, 5, 6)}
         for branch in ("control", "purity")
     }
+    branch_distances = {
+        length: np.empty(len(steps)) for length in (4, 5, 6)
+    }
     rows: list[dict[str, float | int]] = []
     for index, (step, time_value) in enumerate(zip(steps, times, strict=True)):
         tebd_index = int(round(time_value / 0.001))
@@ -162,6 +165,11 @@ def main() -> None:
                 distances[branch][length][index] = trace_distance(
                     branch_rdms[branch][length], tebd_rdms[length]
                 )
+        for length in (4, 5, 6):
+            branch_distances[length][index] = trace_distance(
+                branch_rdms["control"][length],
+                branch_rdms["purity"][length],
+            )
         rows.append(
             {
                 "trajectory_index": index,
@@ -174,6 +182,12 @@ def main() -> None:
                         distances[branch][length][index]
                     )
                     for branch in ("control", "purity")
+                    for length in (4, 5, 6)
+                },
+                **{
+                    f"control_to_purity_rho{length}_trace_distance": (
+                        branch_distances[length][index]
+                    )
                     for length in (4, 5, 6)
                 },
             }
@@ -204,6 +218,10 @@ def main() -> None:
                 for length in (4, 5, 6)
             }
             for branch in ("control", "purity")
+        },
+        "final_control_to_purity_trace_distances": {
+            f"rho{length}": float(branch_distances[length][-1])
+            for length in (4, 5, 6)
         },
     }
     (output / "summary.json").write_text(
@@ -242,6 +260,13 @@ def main() -> None:
                 color=colors[branch],
                 label=branch_label,
             )
+        ax.semilogy(
+            times,
+            branch_distances[length],
+            linestyle=":",
+            color="#666666",
+            label="standard to purity-selected",
+        )
         ax.set(
             ylabel=fr"$D_{{\rm tr}}(\rho_{length},\rho_{length}^{{\rm TEBD}})$",
             title=f"{label} {length}-site RDM error",
@@ -257,6 +282,44 @@ def main() -> None:
     )
     fig.savefig(output / "paired_trajectory_vs_tebd.png", dpi=220)
     fig.savefig(output / "paired_trajectory_vs_tebd.pdf")
+    plt.close(fig)
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(8.0, 7.0), sharex=True, constrained_layout=True
+    )
+    axes[0].plot(
+        times,
+        distances["control"][4],
+        "--",
+        color=colors["control"],
+        label=r"$D_{\rm tr}(\rho_4^{\rm standard},\rho_4^{\rm TEBD})$",
+    )
+    axes[0].plot(
+        times,
+        distances["purity"][4],
+        "-",
+        color=colors["purity"],
+        label=r"$D_{\rm tr}(\rho_4^{\rm purity},\rho_4^{\rm TEBD})$",
+    )
+    axes[0].set_ylabel("trace distance to TEBD")
+    axes[0].set_title(r"Four-site RDM accuracy")
+    axes[0].legend(frameon=False)
+    axes[1].plot(
+        times,
+        branch_distances[4],
+        color="#666666",
+        label=r"$D_{\rm tr}(\rho_4^{\rm standard},\rho_4^{\rm purity})$",
+    )
+    axes[1].set(
+        xlabel="physical time $t$",
+        ylabel="inter-branch trace distance",
+        title=r"Separation of the two $\rho_4$ trajectories",
+    )
+    axes[1].legend(frameon=False)
+    for ax in axes:
+        ax.grid(alpha=0.25)
+    fig.savefig(output / "rho4_trace_distances.png", dpi=220)
+    fig.savefig(output / "rho4_trace_distances.pdf")
     plt.close(fig)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
