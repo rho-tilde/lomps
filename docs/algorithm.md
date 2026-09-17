@@ -1,114 +1,95 @@
 # LOMPS algorithm
 
-LOMPS evolves a finite reduced density matrix while closing the dynamics with
-a uniform left-canonical matrix-product state.
+LOMPS advances local quantum dynamics and closes each time step with a uniform
+left-canonical matrix-product state.
 
-If a run starts from a lower-bond tensor, including a product vector, LOMPS
-separates the physical source from the optimizer seed. The first target
-`target_L(A_source)` is built from the original low-D input. The optimizer is
-started from a deterministic left-canonical seed at the requested trajectory
-bond dimension. After the first accepted update, subsequent targets are built
-from the high-D trajectory tensor itself. This keeps product starts physically
-exact at the first update without forcing a product state to masquerade as an
-injective high-D tensor.
+## Local update
 
-For product starts, the default seed mode is `embedding`, not the circuit
-construction. LOMPS embeds the product tensor into the upper-left virtual block
-of the requested trajectory bond dimension, adds deterministic noise only
-outside the old virtual block, and QR-projects the result back to the
-left-canonical manifold. This seed is deliberately treated only as an optimizer
-starting point; it is not used to define the first physical target. The current
-production default is `--embedding-noise-amplitude 1e-6`; the older `1e-8`
-setting remains available for explicit audits.
-
-When the input source has lower bond dimension than the trajectory tensor, the
-default first-step optimizer is `cg-lm`. LOMPS first fits the frozen first target
-with the historical-style analytic fixed-target Grassmann CG, then polishes the
-same target with the gauge-orthogonal LM optimizer. The CG stage is used only
-for this first low-D-to-high-D fit by default; later trajectory updates use the
-LM warm start and the usual restart protocol.
-
-The product-circuit seed remains available as an explicit opt-in through
-`--initial-seed-mode circuit`, or through `--initial-seed-mode auto` when the
-protocol supports it. It applies the finite even-half / odd-full / even-half
-Strang circuit to a product MPS, keeps the central two tensors of the resulting
-two-site-periodic MPS, and embeds them into one off-diagonal one-site tensor. In
-the qubit L=4 protocol the alternating bond dimensions are 4 and 8, giving a
-D=12 left-canonical seed. A small deterministic Stiefel mixing breaks the exact
-period-two transfer degeneracy before the first optimizer polish. This path is
-kept as a useful diagnostic/experimental construction, but it is not the
-recommended default because it has not been robust in the production product
-launches tested so far.
-
-The generic embedding path is still available for other low-D starts. If
-`--embedding-candidate-seeds` is provided, the runner constructs each candidate
-lift, fits it to the unchanged first target with a bounded screening optimizer,
-and selects the seed with the lowest screening cost. The selected seed and the
-full screen table are recorded in the metadata. This affects only the initial
-optimizer seed; it does not alter the first physical target.
-
-For a left-canonical tensor `A`, the non-integrable reference protocol builds
-a finite-lightcone density matrix, applies an even-half / odd-full / even-half
-Strang circuit, and traces buffer sites to recover the target local block. For
-even `L`, the light cone has `L + 4` sites and the reduction is symmetric:
+Let `A` be the current uMPS tensor. The quench protocol builds an evolved local
+target from a finite light cone. For an even matching window `L`,
 
 ```text
-target_L(A) = Tr_{2 left, 2 right}[U_Strang rho_{L+4}(A) U_Strang^dagger].
+target_L(A) = Tr_{2 left, 2 right}[
+    U_Strang rho_{L+4}(A) U_Strang^dagger
+].
 ```
 
-For odd `L`, LOMPS keeps the Strang circuit on an even number of sites by using
-an `L + 5` site light cone and averaging the two parity-related reductions:
+For odd `L`, the light cone contains `L+5` sites. LOMPS averages the two
+parity-related reductions,
 
 ```text
 target_L(A) = 1/2 target_L^{2|3}(A) + 1/2 target_L^{3|2}(A).
 ```
 
-The next tensor minimizes
+The next tensor `B` minimizes
 
 ```text
 C(B) = 1/2 ||rho_L(B) - target_L(A)||_F^2.
 ```
 
-The runner warns if the two odd-`L` reductions have a trace distance larger
-than the configured parity warning threshold.
+The target is computed once per physical time step. Optimizer restarts change
+the initial guess for `B`, not the target being fitted.
 
-The local matching dimension count uses translation invariance. A generic
-trace-fixed density matrix on `L` sites has `d^(2L) - 1` real degrees of
-freedom, but the TI consistency of the two `(L - 1)`-site marginals leaves
+## MPS geometry and optimization
+
+The tensor is constrained to the left-canonical manifold. LOMPS constructs its
+real Stiefel tangent, removes the infinitesimal MPS gauge tangent, and evaluates
+the analytic RDM derivative on the remaining horizontal directions. The
+default dense optimizer takes a damped Gauss--Newton/Levenberg--Marquardt step
+and returns accepted steps to the manifold by polar retraction.
+
+The matrix-free backend applies the RDM Jacobian and its adjoint through local
+contractions. It solves the damped linear problem with CG or LSMR without
+storing the full Jacobian. Both backends minimize the same fixed-target cost.
+
+The ansatz transfer fixed point is computed with a dense eigensolver by
+default. The optional `fast` policy tries ARPACK and falls back to the dense
+solver if validation fails. Dense fixed points are preferred for reference
+trajectories because they are reproducible across repeated runs.
+
+## Lower-bond-dimension initial states
+
+When the initial state has a smaller bond dimension than the requested
+trajectory, LOMPS keeps the physical source separate from the optimizer seed.
+The first target is built from the original source tensor. A deterministic
+left-canonical lift initializes the higher-dimensional optimizer but does not
+alter that target.
+
+For product states, the default lift embeds the product tensor into the
+upper-left virtual block, adds deterministic noise in the new virtual
+subspace, and restores left canonical form by QR projection. The first fit uses
+fixed-target conjugate gradient followed by an LM polish. After the first
+accepted update, the high-dimensional tensor becomes the source of subsequent
+targets.
+
+Alternative seed construction and screening options are described in
+[product_starts.md](product_starts.md).
+
+## Dimension estimate
+
+A trace-fixed `L`-site density matrix has `d^(2L)-1` real parameters. Translation
+invariance imposes equality of its two `(L-1)`-site marginals, leaving
 
 ```text
-dim rho_L^TI = d^(2L) - d^(2L - 2).
+dim rho_L^TI = d^(2L) - d^(2L-2).
 ```
 
-The uMPS quotient tangent has real dimension `2(d - 1)D^2`, so
-`minimum_bond_dimension_for_ti_rdm(d, L)` returns the smallest `D` satisfying
+The real uMPS quotient tangent has dimension `2(d-1)D^2`. The helper
+`minimum_bond_dimension_for_ti_rdm(d,L)` therefore returns the smallest `D`
+satisfying
 
 ```text
-2(d - 1)D^2 >= d^(2L) - d^(2L - 2).
+2(d-1)D^2 >= d^(2L) - d^(2L-2).
 ```
 
-For qubits this gives `D_min = 5` at `L = 3` and `D_min = 10` at `L = 4`.
+For qubits this count gives `D_min=5` at `L=3` and `D_min=10` at `L=4`. It is a
+parameter-counting estimate, not a guarantee that every target is reachable or
+that the optimizer is well conditioned.
 
-The optimizer constructs the real Stiefel tangent of the left-canonical
-tensor, removes the true infinitesimal MPS gauge tangent, evaluates the
-analytic RDM Jacobian on the remaining horizontal slice, and takes a damped
-Gauss--Newton/Levenberg--Marquardt step. Each accepted step is returned to the
-left-canonical manifold by polar retraction.
+## Checkpointing and recovery
 
-Inside optimizer evaluations, LOMPS computes the ansatz transfer fixed point
-with a selectable policy. The default `dense` policy uses the dense eigensolver
-and is chosen for bitwise reproducibility in production/reference trajectories.
-The optional `fast` policy tries ARPACK first and falls back to dense if the
-iterative fixed point fails validation; this is faster, but repeated runs can
-diverge at the last few floating-point digits because the iterative fixed point
-is not bitwise deterministic.
-
-If the warm-started solve plateaus, LOMPS keeps `target(A)` fixed and restarts
-the same minimization from more distant left-canonical tensors. A restart never
-changes the target; it only changes the optimizer's initial point. The runner
-records every trial, its distance, cost, residual, evaluation count, and wall
-time.
-
-Stationarity searches and fixed-rho finite-window fibre experiments are
-separate research questions and are intentionally absent from the core
-evolution package.
+Every accepted tensor is stored with its right transfer fixed point. If a warm
+start fails, the runner retries the same fixed target from configured
+left-canonical perturbations and records the cost, distance, evaluation count,
+and wall time of each attempt. Failed candidates are never used as physical
+sources for later time steps.

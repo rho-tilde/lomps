@@ -1,44 +1,37 @@
-# Product-State Starts and Student Runbook
+# Product-state and lower-bond-dimension starts
 
-This is the practical launch guide for product-state LOMPS trajectories. The
-goal is reproducible production runs plus fast local audits before sending jobs
-to a cluster.
+This guide covers trajectories whose physical initial state has a smaller bond
+dimension than the requested LOMPS trajectory.
 
-## Default launch protocol
+## Source and optimizer seed
 
-For an input product vector or any lower-bond input tensor, LOMPS separates the
-physical source from the optimizer seed:
+LOMPS treats the physical source and optimizer seed separately:
 
-1. Load `--initial-A`.
-   - Shape `(d,)` is treated as a product vector.
-   - Shape `(d,D,D)` is treated as a left-canonical uMPS tensor.
-   - Shape `(1,d,D,D)` is accepted as a singleton saved batch.
-2. Build the first physical target from the original source tensor:
-   `target_L(A_source)`.
-3. Build a trajectory-D optimizer seed.
-   - Default: `--initial-seed-mode embedding`.
-   - The source tensor is embedded into the upper-left virtual block.
-   - Deterministic complex noise is added only outside the old virtual block.
-   - The result is QR-projected back to the left-canonical manifold.
-4. Fit the first target with `--first-step-optimizer cg-lm`.
-   - The CG stage is the historical fixed-target QDMT launch.
-   - The LM stage polishes the same frozen first target.
-5. After the first accepted tensor, later targets are built from the accepted
-   trajectory tensor and its cached right fixed point.
+1. Load the state supplied through `--initial-A`.
+2. Build the first evolved target from that original state.
+3. Construct a left-canonical optimizer seed at the requested bond dimension.
+4. Fit the fixed first target with conjugate gradient followed by an LM polish.
+5. Use the first accepted high-dimensional tensor as the source for later time
+   steps.
 
-The product-circuit seed is still available with `--initial-seed-mode circuit`
-or `--initial-seed-mode auto`, but it is not the production default. It was
-useful diagnostically but less robust in the product-start audits.
+This procedure preserves the exact product or low-dimensional first target.
+The lifted seed only initializes the variational fit.
 
-## Recommended product-state command
+The default `embedding` seed places the source tensor in the upper-left virtual
+block, adds deterministic noise in the new virtual subspace, and restores left
+canonical form by QR projection. The product-circuit seed remains available
+through `--initial-seed-mode circuit`, but it is intended for controlled
+comparisons rather than routine production.
 
-Create the historical `+y` quench vector:
+## Basic product-state run
+
+Create the `+y` product vector:
 
 ```bash
 python examples/product_state_tensor.py --state y --output runs/initial_y.npy
 ```
 
-Run a short, healthy L=2 local audit trajectory:
+Run a short `L=2,D=4` trajectory:
 
 ```bash
 lomps-run \
@@ -47,7 +40,7 @@ lomps-run \
   --block-length 2 \
   --bond-dimension 4 \
   --steps 1000 \
-  --base-time 0.0 \
+  --base-time 0 \
   --delta-t 1e-3 \
   --embedding-noise-amplitude 1e-6 \
   --first-step-accept-cost 3e-16 \
@@ -56,8 +49,8 @@ lomps-run \
   --checkpoint-every 25
 ```
 
-For L=5/D=20 or larger cluster runs, use the same structure but give the first
-step and restart protocol more time:
+For a larger cluster run, keep the same structure and increase the first-step
+budget and restart coverage. For example:
 
 ```bash
 lomps-run \
@@ -66,7 +59,7 @@ lomps-run \
   --block-length 5 \
   --bond-dimension 20 \
   --steps 1000 \
-  --base-time 0.0 \
+  --base-time 0 \
   --delta-t 1e-3 \
   --embedding-noise-amplitude 1e-6 \
   --first-step-accept-cost 3e-16 \
@@ -79,107 +72,63 @@ lomps-run \
   --run-time-limit 43200
 ```
 
-Resume with the same command plus `--resume`. Create `runs/.../PAUSE` to stop
-cleanly between timesteps.
+Create `runs/.../PAUSE` to stop between completed time steps. Remove it and
+repeat the same command with `--resume` to continue.
 
-## Parameter defaults and recommendations
+## Main controls
 
-| Parameter | Code default | Production recommendation |
-| --- | ---: | --- |
-| `--block-length` | `4` | Choose the intended QDMT window L. Odd L uses parity-averaged targets. |
-| `--bond-dimension` | input D | Set explicitly for product starts. |
-| `--delta-t` | `1e-3` | Use `1e-3` for reference runs; halve it for Trotter checks. |
-| `--initial-seed-mode` | `embedding` | Keep default unless deliberately testing circuit seeds. |
-| `--embedding-noise-amplitude` | `1e-6` | Good product-start compromise from audits. |
-| `--embedding-seed` | `104729` | Keep fixed for reproducibility; vary only in audits. |
-| `--first-step-optimizer` | `cg-lm` | Keep default for product or lower-D starts. |
-| `--first-step-accept-cost` | `3e-16` | Keep strict for A1 fits unless a large run needs a manual relaxation. |
-| `--accept-cost` | `1e-14` | Use `1e-15` for stricter continuation; `3e-16` can chase the floor. |
-| `--fixed-point-solver` | `dense` | Use `dense` for reproducibility; `fast` for exploratory speed checks. |
-| `--target-contraction` | `tensor` | Keep default; `dense` is a regression path. |
-| `--strict-retry` | enabled | Useful with sensible tolerances; can waste time near machine floor. |
-| `--checkpoint-every` | `25` | Use smaller values for long cluster runs. |
+| Parameter | Typical choice | Meaning |
+| --- | --- | --- |
+| `--block-length` | chosen window `L` | Size of the matched local RDM. |
+| `--bond-dimension` | set explicitly | Bond dimension of the fitted trajectory. |
+| `--delta-t` | `1e-3` | Reference time step; halve it for Trotter checks. |
+| `--initial-seed-mode` | `embedding` | Construction of the high-dimensional first seed. |
+| `--embedding-noise-amplitude` | `1e-6` | Deterministic noise added in the new virtual subspace. |
+| `--first-step-optimizer` | `cg-lm` | Fixed-target CG followed by LM polishing. |
+| `--first-step-accept-cost` | `3e-16` | Acceptance threshold for the first fit. |
+| `--accept-cost` | `1e-14` or `1e-15` | Threshold for recurrent trajectory steps. |
+| `--fixed-point-solver` | `dense` | Reproducible ansatz fixed-point calculation. |
+| `--target-contraction` | `tensor` | Local tensor-axis target evolution. |
 
-Cost convention:
+The cost convention is
 
 ```text
-C = 1/2 ||rho_L(A_fit) - rho_target||_F^2
+C = 1/2 ||rho_L(A_fit) - rho_target||_F^2,
 ```
 
-So the RDM Frobenius residual is `sqrt(2*C)` up to small numerical differences
-from later diagnostic fixed-point solves.
+so the Frobenius residual is `sqrt(2*C)`.
 
-## Audit scripts
+## External seeds and seed screening
 
-First-step product-start grid:
+Pass an existing high-dimensional optimizer seed with `--initial-seed-A`. The
+first physical target is still built from `--initial-A`. If the supplied seed
+must be lifted further, `--initial-seed-lift-noise-amplitude` controls the new
+virtual subspace.
+
+For less structured low-dimensional inputs, `--embedding-candidate-seeds`
+accepts a comma-separated list of deterministic lift seeds. LOMPS screens each
+candidate against the same first target and records the selected seed and the
+complete screening table in the run metadata.
+
+## Validation
+
+The product-start tests cover product-vector loading, deterministic lifting,
+first-target preservation, CG/LM fitting, checkpointing, and resume behavior:
 
 ```bash
-python examples/product_start_audit.py \
-  --mode first-step \
-  --states x,y,z \
-  --block-lengths 2,3,4 \
-  --bond-dimensions 4,6,8,12 \
-  --delta-ts 1e-3 \
-  --embedding-noises 1e-8,1e-6,1e-4 \
-  --cg-seconds 50 \
-  --output-csv runs/audits/product_first_step_grid.csv
+python -m unittest discover -s tests -p 'test_evolution_protocol.py'
+python -m unittest discover -s tests -p 'test_embedding.py'
 ```
 
-Step-2 tolerance check:
+For a broader parameter study, `examples/product_start_audit.py` can scan
+initial states, window sizes, bond dimensions, time steps, and embedding-noise
+levels. Its CSV output includes first-fit costs, RDM errors, transfer gaps, and
+wall times.
 
-```bash
-python examples/product_start_audit.py \
-  --mode step2 \
-  --states y \
-  --block-lengths 2 \
-  --bond-dimensions 4,6,8 \
-  --delta-ts 1e-3,5e-4 \
-  --embedding-noises 1e-8,1e-6,1e-4 \
-  --first-step-accept-cost 3e-16 \
-  --accept-cost 1e-15 \
-  --relaxed-accept-cost 1e-14 \
-  --cg-seconds 100 \
-  --output-csv runs/audits/product_step2_grid.csv
-```
+## Observables
 
-The audit CSV records seed diagnostics, CG/LM status, costs, RDM Frobenius
-errors, final transfer gap, final right-fixed-point minimum eigenvalue, and
-wall time.
-
-## Audit snapshot, 2026-07-15
-
-The broad first-step audit over 90 cases passed with `cg-lm`.
-
-- Maximum polish cost: `5.27e-15`.
-- Median polish cost: `2.55e-16`.
-- Maximum final RDM Frobenius error: `1.03e-7`.
-- Worst final transfer gap: `4.16e-2`.
-- Median final transfer gap: `2.72e-1`.
-
-Noise tradeoff:
-
-- `1e-8` is accurate but can leave a nearly rank-deficient right fixed point.
-- `1e-6` is the best current default compromise.
-- `1e-4` often improves seed conditioning but tends to slow the first solve.
-
-The L=2/D=4 long checks were healthy:
-
-- `dt=1e-3`, 1000 steps to `t=1`: completed with no restarts; max cost
-  `9.99e-16`; final transfer gap `0.421`.
-- `dt=5e-4`, 2000 steps to `t=1`: completed with no restarts; max cost
-  `1.00e-15`; final transfer gap `0.415`.
-
-The main warning from the audits is the continuation tolerance. A strict
-`--accept-cost 3e-16` can trigger expensive retries at step 2 for L=2/D=6 and
-L=2/D=8, where the optimizer often stops by gradient tolerance around
-`1e-15`. This is not a failed physical launch; it is mostly a numerical-floor
-issue. The CLI therefore defaults to `--first-step-accept-cost 3e-16` and
-`--accept-cost 1e-14`. Use `--accept-cost 1e-15` for stricter continuation.
-
-## Observables and energy density
-
-Use `lomps.observables.local_expectations` for local observables and
-`lomps.gates.two_site_hamiltonian_tfim` for the quench energy density:
+Local Pauli observables and the quench energy density can be evaluated from a
+saved tensor with `lomps.observables.local_expectations`:
 
 ```python
 import numpy as np
@@ -197,5 +146,5 @@ values = local_expectations(
 print(values)
 ```
 
-The energy value is `Tr(rho_2 H2)` for the two-site Hamiltonian convention used
-by the LOMPS quench protocol.
+Here `energy` is `Tr(rho_2 H2)` for the two-site Hamiltonian convention used by
+the nonintegrable Ising protocol.
