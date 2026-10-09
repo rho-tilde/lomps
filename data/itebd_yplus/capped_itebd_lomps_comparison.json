@@ -1,0 +1,94 @@
+{
+  "comparison": "translation-averaged RDM trace distance to growing-chi iTEBD reference",
+  "reference": "UCL Research Data Repository DOI 10.5522/04/33898246: data/classical/tebd_reference/yplus/non_integrable_job_11218/all_rdms_L_rdm-6_11218.npy",
+  "lomps": {
+    "patch_size": 6,
+    "bond_dimension": 41,
+    "rdm": {
+      "l1": {
+        "tdev_1e-3": 6.58,
+        "trace_distance_at_final_time": 0.0019514477828257914
+      },
+      "l2": {
+        "tdev_1e-3": 5.64,
+        "trace_distance_at_final_time": 0.0031929840745494164
+      },
+      "l3": {
+        "tdev_1e-3": 4.9,
+        "trace_distance_at_final_time": 0.007008889133236696
+      },
+      "l4": {
+        "tdev_1e-3": 4.15,
+        "trace_distance_at_final_time": 0.014889725900959216
+      }
+    }
+  },
+  "itebd": {
+    "41": {
+      "cap_reached_on_a_bonds": 2.575,
+      "cap_reached_on_b_bonds": 2.487,
+      "rdm": {
+        "l1": {
+          "tdev_1e-3": 4.36,
+          "trace_distance_at_t7": 0.020856301921918063
+        },
+        "l2": {
+          "tdev_1e-3": 4.04,
+          "trace_distance_at_t7": 0.03467682114612281
+        },
+        "l3": {
+          "tdev_1e-3": 3.67,
+          "trace_distance_at_t7": 0.05766180340467163
+        },
+        "l4": {
+          "tdev_1e-3": 3.54,
+          "trace_distance_at_t7": 0.09076460860432435
+        }
+      }
+    },
+    "82": {
+      "cap_reached_on_a_bonds": 3.4010000000000002,
+      "cap_reached_on_b_bonds": 3.3080000000000003,
+      "rdm": {
+        "l1": {
+          "tdev_1e-3": 5.44,
+          "trace_distance_at_t7": 0.006141564794284009
+        },
+        "l2": {
+          "tdev_1e-3": 5.14,
+          "trace_distance_at_t7": 0.0147475294334879
+        },
+        "l3": {
+          "tdev_1e-3": 4.8100000000000005,
+          "trace_distance_at_t7": 0.036244352071863925
+        },
+        "l4": {
+          "tdev_1e-3": 4.6000000000000005,
+          "trace_distance_at_t7": 0.05466154738604437
+        }
+      }
+    },
+    "164": {
+      "cap_reached_on_a_bonds": 4.223,
+      "cap_reached_on_b_bonds": 4.136,
+      "rdm": {
+        "l1": {
+          "tdev_1e-3": 6.23,
+          "trace_distance_at_t7": 0.001995762440917842
+        },
+        "l2": {
+          "tdev_1e-3": 5.88,
+          "trace_distance_at_t7": 0.006621434446273139
+        },
+        "l3": {
+          "tdev_1e-3": 5.74,
+          "trace_distance_at_t7": 0.018303742280275488
+        },
+        "l4": {
+          "tdev_1e-3": 5.59,
+          "trace_distance_at_t7": 0.027449038290039425
+        }
+      }
+    }
+  }
+}

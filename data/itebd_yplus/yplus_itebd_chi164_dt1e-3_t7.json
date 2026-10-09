@@ -1,0 +1,15 @@
+{
+  "algorithm": "two-site iTEBD in Vidal Gamma-Lambda form",
+  "trotter_order": 2,
+  "layer_order": "A-B half, B-A full, A-B half",
+  "hamiltonian_bond": "-ZZ + 1.05 XI - 0.5 ZI",
+  "initial_state": "Y+ product state",
+  "max_chi_per_bond": 164,
+  "dt": 0.001,
+  "t_final": 7.0,
+  "sample_dt": 0.01,
+  "svd_cutoff_absolute_schmidt_value": 1e-08,
+  "max_rdm_length": 4,
+  "window_combination": "arithmetic mean of A-origin and B-origin RDMs",
+  "wall_seconds": 415.94576491598855
+}

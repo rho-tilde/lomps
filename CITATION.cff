@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the accompanying paper and archived dataset.
+title: LOMPS
+type: software
+authors:
+  - family-names: Wille
+    given-names: Carolin
+  - family-names: Marvell
+    given-names: Maximilian
+  - family-names: Stewart
+    given-names: Lauren
+  - family-names: Murphy
+    given-names: Maximillian
+  - family-names: Wimalaweera
+    given-names: Vinul
+  - family-names: Gover
+    given-names: Lesley
+  - family-names: Green
+    given-names: Andrew G.
+version: 0.1.0
+date-released: 2026-09-17
+repository-code: https://github.com/rho-tilde/lomps
+url: https://github.com/rho-tilde/lomps
+preferred-citation:
+  type: article
+  title: Locally optimized variational evolution for quantum many-body systems
+  authors:
+    - family-names: Wille
+      given-names: Carolin
+    - family-names: Marvell
+      given-names: Maximilian
+    - family-names: Stewart
+      given-names: Lauren
+    - family-names: Murphy
+      given-names: Maximillian
+    - family-names: Wimalaweera
+      given-names: Vinul
+    - family-names: Gover
+      given-names: Lesley
+    - family-names: Green
+      given-names: Andrew G.
+  year: 2026
+  url: https://arxiv.org/abs/2609.20802
+  identifiers:
+    - type: other
+      value: arXiv:2609.20802
+      description: arXiv identifier

@@ -15,6 +15,26 @@ The package provides:
 - checkpointed, resumable trajectories with recorded optimizer diagnostics;
 - compact reference data for integrable and nonintegrable benchmarks.
 
+## Paper, code snapshot and data
+
+The method is described in:
+
+> Carolin Wille, Maximilian Marvell, Lauren Stewart, Maximillian Murphy,
+> Vinul Wimalaweera, Lesley Gover and Andrew G. Green,
+> *Locally optimized variational evolution for quantum many-body systems*,
+> [arXiv:2609.20802](https://arxiv.org/abs/2609.20802) (2026).
+
+The manuscript identifies commit
+[`923037b`](https://github.com/rho-tilde/lomps/tree/923037b) as its fixed code
+snapshot. The default branch contains later documentation and reproducibility
+additions without changing that archived snapshot.
+
+The full numerical and hardware dataset is archived in the UCL Research Data
+Repository at [doi:10.5522/04/33898246](https://doi.org/10.5522/04/33898246).
+The repository includes compact reference files needed for quick regression
+tests and figure-level checks; large production trajectories remain in the
+DOI-backed archive.
+
 ## Installation
 
 LOMPS requires Python 3.11 or newer.
@@ -142,6 +162,24 @@ python examples/generate_free_fermion_reference.py
 The output contains the transverse magnetization and local Hilbert--Schmidt
 Loschmidt signature on the production time grid.
 
+## Finite-bond-dimension iTEBD benchmark
+
+The finite-bond-dimension iTEBD trajectories used in the paper's comparison
+with `L=6`, `D=41` LOMPS are provided in
+[`data/itebd_yplus/`](data/itebd_yplus/). The directory contains the capped
+trajectories for `chi = 41, 82, 164`, plot-ready trace distances and full
+provenance notes. The independent two-site iTEBD implementation can be rerun
+with, for example,
+
+```bash
+python scripts/run_capped_itebd_yplus.py \
+  --max-chi 41 --dt 0.001 --t-final 7 --sample-dt 0.01 \
+  --max-rdm-length 4 --svd-cutoff 1e-8 \
+  --output data/itebd_yplus/yplus_itebd_chi41_dt1e-3_t7.npz
+```
+
+![Capped iTEBD and LOMPS comparison](docs/figures/capped_itebd_lomps_comparison.png)
+
 ## Output and conventions
 
 Trajectory tensors are stored in `states.npy`; aligned right transfer fixed
@@ -178,3 +216,23 @@ python -m unittest discover -s tests -p 'test_integrable.py'
 - [Adaptive bond-dimension trajectories](docs/adaptive_bond_runs.md)
 - [Integrable TFIM benchmark](docs/integrable_benchmarks.md)
 - [Large-Jacobian BLAS safety](docs/large_jacobian_blas_safety.md)
+
+## Citation
+
+Please cite the paper and the archived dataset when using this software or its
+reference data. Machine-readable citation metadata are provided in
+[`CITATION.cff`](CITATION.cff).
+
+```bibtex
+@article{Wille2026LOMPS,
+  author        = {Wille, Carolin and Marvell, Maximilian and Stewart, Lauren and
+                   Murphy, Maximillian and Wimalaweera, Vinul and Gover, Lesley and
+                   Green, Andrew G.},
+  title         = {Locally optimized variational evolution for quantum many-body systems},
+  year          = {2026},
+  eprint        = {2609.20802},
+  archivePrefix = {arXiv},
+  primaryClass  = {quant-ph},
+  url           = {https://arxiv.org/abs/2609.20802}
+}
+```
