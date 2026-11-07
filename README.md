@@ -37,16 +37,26 @@ DOI-backed archive.
 
 ## Installation
 
-LOMPS requires Python 3.11 or newer.
+LOMPS requires Python 3.11 or newer, NumPy 1.26 or newer and SciPy 1.11
+or newer. The regression suite runs in GitHub Actions on Ubuntu with Python
+3.12; the exact NumPy and SciPy versions used for the manuscript snapshot are
+listed in `requirements-tested.txt`. The quick demonstration below was also
+verified on macOS 27.2 with Python 3.12.14, NumPy 2.4.6 and SciPy 1.17.1.
+
+A standard desktop computer is sufficient for installation, testing and the
+quick demonstration; no non-standard hardware is required. Large production
+trajectories, particularly at large patch size and bond dimension, can require
+high-performance-computing resources.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-The dependency versions used for regression testing are listed in
-`requirements-tested.txt`.
+On an internet-connected modern desktop, installation typically takes two to
+five minutes when binary NumPy and SciPy packages are available.
 
 ## Quick start
 
@@ -55,6 +65,22 @@ Run the compact ten-step example:
 ```bash
 python examples/ten_step_quench.py
 ```
+
+The demonstration uses the included input
+`data/nonintegrable_d12_t0p001.npy` and requires no external data. It prints
+ten lines containing the step number, physical time, optimization cost and
+residual norm. Approximate reference costs are provided in
+`data/ten_step_d12_reference.json`. A successful run begins and ends with
+output of the following form:
+
+```text
+step=01 time=0.002 cost=1.740864e-15 residual=5.900617e-08
+...
+step=10 time=0.011 cost=2.643354e-16 residual=2.299284e-08
+```
+
+The demonstration completed in approximately 20--25 seconds on the tested
+desktop described above.
 
 For a checkpointed trajectory, use `lomps-run`:
 
@@ -236,3 +262,9 @@ reference data. Machine-readable citation metadata are provided in
   url           = {https://arxiv.org/abs/2609.20802}
 }
 ```
+
+## License
+
+No explicit software license has currently been assigned to this repository.
+The source is publicly accessible for research transparency and peer review;
+all rights remain with the copyright holders.
